@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Where to DINE - NYC Dining Hotspot Recommender</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- Custom CSS -->
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            background: white;
+            border-radius: 10px;
+            padding: 20px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #333;
+            font-size: 2em;
+            margin-bottom: 5px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .stats {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-box {
+            background: #f8f9fa;
+            padding: 10px 15px;
+            border-radius: 5px;
+            flex: 1;
+        }
+
+        .stat-label {
+            font-size: 0.75em;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 20px;
+        }
+
+        .map-container {
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            height: 700px;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        .sidebar {
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            height: 700px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .instructions {
+            background: #f0f7ff;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+        }
+
+        .search-info {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 0.85em;
+        }
+
+        .recommendation-list {
+            margin-top: 15px;
+        }
+
+        .recommendation-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 12px;
+            border-left: 4px solid #667eea;
+            transition: transform 0.2s, box-shadow 0.2s;
+            cursor: pointer;
+        }
+
+        .recommendation-card:hover {
+            transform: translateX(5px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        .rec-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .rec-rank {
+            background: #667eea;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .rec-score {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .rec-details {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .rec-detail-row {
+            margin: 3px 0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 30px;
+            color: #666;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 30px;
+            color: #999;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .legend {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .legend-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+            font-size: 0.85em;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            margin-right: 10px;
+        }
+
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                height: auto;
+                max-height: 600px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🍽️ Where to DINE</h1>
+            <p class="subtitle">NYC Dining Hotspot Recommender - Data-Driven Restaurant Discovery</p>
+
+            <div class="stats" id="stats">
+                <div class="stat-box">
+                    <div class="stat-label">Total Hotspots</div>
+                    <div class="stat-value" id="stat-hotspots">-</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Restaurants</div>
+                    <div class="stat-value" id="stat-restaurants">-</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Taxi Dropoffs</div>
+                    <div class="stat-value" id="stat-dropoffs">-</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-label">Avg Score</div>
+                    <div class="stat-value" id="stat-avg-score">-</div>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <div class="map-container">
+                <div id="map"></div>
+            </div>
+
+            <div class="sidebar">
+                <h2>📍 Find Dining Hotspots</h2>
+
+                <div class="instructions">
+                    <strong>How to use:</strong><br>
+                    1. Click anywhere on the map<br>
+                    2. See nearby dining hotspots ranked by popularity & distance<br>
+                    3. Click on a recommendation to view on map
+                </div>
+
+                <div id="search-info" style="display: none;"></div>
+
+                <div id="recommendations">
+                    <p style="color: #999; text-align: center; padding: 30px;">
+                        👆 Click on the map to get recommendations
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <!-- Custom JS -->
+    <script>
+        // Initialize map centered on NYC
+        const map = L.map('map').setView([40.7128, -74.0060], 11);
+
+        // Add tile layer
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Layers
+        let hotspotsLayer = L.layerGroup().addTo(map);
+        let userMarker = null;
+        let userCircle = null;
+        let highlightedHotspot = null;
+
+        // Store hotspots data
+        let hotspotsData = null;
+
+        // Color scale function
+        function getColor(score) {
+            if (score >= 80) return '#FF0000';
+            if (score >= 60) return '#FFA500';
+            if (score >= 40) return '#FFD700';
+            return '#FFFF00';
+        }
+
+        // Load stats
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+
+                document.getElementById('stat-hotspots').textContent = stats.total_hotspots;
+                document.getElementById('stat-restaurants').textContent = stats.total_restaurants.toLocaleString();
+                document.getElementById('stat-dropoffs').textContent = stats.total_taxi_dropoffs.toLocaleString();
+                document.getElementById('stat-avg-score').textContent = stats.avg_popularity_score.toFixed(1);
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        // Load and display all hotspots
+        async function loadHotspots() {
+            try {
+                const response = await fetch('/api/hotspots');
+                hotspotsData = await response.json();
+
+                hotspotsLayer.clearLayers();
+
+                hotspotsData.features.forEach(feature => {
+                    const props = feature.properties;
+                    const score = props.popularity_score || 0;
+                    const rank = props.rank || 0;
+
+                    const polygon = L.geoJSON(feature, {
+                        style: {
+                            color: '#333',
+                            weight: 2,
+                            fillColor: getColor(score),
+                            fillOpacity: 0.4
+                        }
+                    });
+
+                    const popupContent = `
+                        <strong>Rank #${rank}</strong><br>
+                        <strong>Score:</strong> ${score.toFixed(1)}/100<br>
+                        <strong>Restaurants:</strong> ${props.n_restaurants || 0}<br>
+                        <strong>Taxi Dropoffs:</strong> ${(props.n_taxi_dropoffs || 0).toLocaleString()}<br>
+                        <strong>Avg Rating:</strong> ${props.avg_rating ? props.avg_rating.toFixed(2) : 'N/A'}
+                    `;
+
+                    polygon.bindPopup(popupContent);
+                    polygon.addTo(hotspotsLayer);
+                });
+
+                console.log(`Loaded ${hotspotsData.features.length} hotspots`);
+            } catch (error) {
+                console.error('Error loading hotspots:', error);
+            }
+        }
+
+        // Handle map click - get recommendations
+        map.on('click', async function(e) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+
+            // Remove previous user marker
+            if (userMarker) {
+                map.removeLayer(userMarker);
+            }
+            if (userCircle) {
+                map.removeLayer(userCircle);
+            }
+
+            // Add new marker
+            userMarker = L.marker([lat, lon], {
+                icon: L.icon({
+                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                    iconSize: [25, 41],
+                    iconAnchor: [12, 41],
+                    popupAnchor: [1, -34],
+                    shadowSize: [41, 41]
+                })
+            }).addTo(map);
+
+            // Add search radius circle (2km)
+            userCircle = L.circle([lat, lon], {
+                radius: 2000,
+                color: '#3388ff',
+                fillColor: '#3388ff',
+                fillOpacity: 0.1,
+                weight: 2,
+                dashArray: '5, 5'
+            }).addTo(map);
+
+            // Show loading
+            document.getElementById('recommendations').innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Finding nearby hotspots...</p>
+                </div>
+            `;
+
+            // Fetch recommendations
+            try {
+                const response = await fetch('/api/recommend', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        lat: lat,
+                        lon: lon,
+                        max_distance_km: 2.0,
+                        limit: 10
+                    })
+                });
+
+                const data = await response.json();
+
+                // Show search info
+                const searchInfo = document.getElementById('search-info');
+                searchInfo.style.display = 'block';
+                searchInfo.innerHTML = `
+                    📍 <strong>Search Location:</strong> ${lat.toFixed(4)}, ${lon.toFixed(4)}<br>
+                    🔍 <strong>Search Radius:</strong> ${data.search_radius_km} km<br>
+                    ✅ <strong>Found:</strong> ${data.total_found} hotspot${data.total_found !== 1 ? 's' : ''}
+                `;
+
+                // Display recommendations
+                displayRecommendations(data.recommendations);
+
+            } catch (error) {
+                console.error('Error getting recommendations:', error);
+                document.getElementById('recommendations').innerHTML = `
+                    <div class="no-results">
+                        <p>❌ Error loading recommendations</p>
+                    </div>
+                `;
+            }
+        });
+
+        // Display recommendations
+        function displayRecommendations(recommendations) {
+            const container = document.getElementById('recommendations');
+
+            if (recommendations.length === 0) {
+                container.innerHTML = `
+                    <div class="no-results">
+                        <p>😕 No hotspots found within 2 km</p>
+                        <p style="font-size: 0.85em; margin-top: 10px;">Try clicking closer to Manhattan or Brooklyn</p>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '<div class="recommendation-list">';
+
+            recommendations.forEach((rec, index) => {
+                html += `
+                    <div class="recommendation-card" onclick="highlightHotspot(${rec.centroid_lat}, ${rec.centroid_lon})">
+                        <div class="rec-header">
+                            <div class="rec-rank">Rank #${rec.rank}</div>
+                            <div class="rec-score">${rec.recommendation_score.toFixed(1)}</div>
+                        </div>
+                        <div class="rec-details">
+                            <div class="rec-detail-row">
+                                <strong>📍 Distance:</strong> ${rec.distance_km.toFixed(2)} km
+                            </div>
+                            <div class="rec-detail-row">
+                                <strong>🏆 Popularity:</strong> ${rec.popularity_score.toFixed(1)}/100
+                            </div>
+                            <div class="rec-detail-row">
+                                <strong>🍴 Restaurants:</strong> ${rec.n_restaurants}
+                            </div>
+                            <div class="rec-detail-row">
+                                <strong>🚕 Taxi Dropoffs:</strong> ${rec.n_taxi_dropoffs.toLocaleString()}
+                            </div>
+                            ${rec.avg_rating ? `
+                            <div class="rec-detail-row">
+                                <strong>⭐ Avg Rating:</strong> ${rec.avg_rating.toFixed(2)}
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        // Highlight a hotspot on the map
+        function highlightHotspot(lat, lon) {
+            // Remove previous highlight
+            if (highlightedHotspot) {
+                map.removeLayer(highlightedHotspot);
+            }
+
+            // Add highlight marker
+            highlightedHotspot = L.circleMarker([lat, lon], {
+                radius: 15,
+                color: '#FF0000',
+                fillColor: '#FF0000',
+                fillOpacity: 0.3,
+                weight: 3
+            }).addTo(map);
+
+            // Pan to location
+            map.flyTo([lat, lon], 14, {
+                duration: 1
+            });
+
+            // Remove highlight after 3 seconds
+            setTimeout(() => {
+                if (highlightedHotspot) {
+                    map.removeLayer(highlightedHotspot);
+                    highlightedHotspot = null;
+                }
+            }, 3000);
+        }
+
+        // Add legend
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'legend');
+            div.innerHTML = `
+                <div class="legend-title">Hotspot Quality</div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF0000;"></div>
+                    <span>High (80-100)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FFA500;"></div>
+                    <span>Medium-High (60-80)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FFD700;"></div>
+                    <span>Medium (40-60)</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FFFF00;"></div>
+                    <span>Low (0-40)</span>
+                </div>
+            `;
+            return div;
+        };
+        legend.addTo(map);
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            loadStats();
+            loadHotspots();
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "silhouette_score": 0.9998619678463686,
+  "davies_bouldin_index": 0.09187568660254991,
+  "n_clusters": 233,
+  "n_noise": 209,
+  "n_total": 2325409,
+  "pct_clustered": 99.9910123337443
+}

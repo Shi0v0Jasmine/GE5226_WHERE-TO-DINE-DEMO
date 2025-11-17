@@ -1,0 +1,16 @@
+{
+  "input_data": {
+    "n_dining_zones": 189,
+    "n_taxi_hotspots": 233,
+    "dining_total_area_sqkm": 1930.5755054897459,
+    "taxi_total_area_sqkm": 63.03414069469597
+  },
+  "final_hotspots": {
+    "n_hotspots": 0,
+    "total_area_sqkm": 0.0,
+    "avg_area_sqm": 0,
+    "total_restaurants": 0,
+    "total_taxi_dropoffs": 0
+  },
+  "top_hotspots": []
+}

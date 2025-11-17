@@ -1,0 +1,64 @@
+# Core Data Science
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Geospatial
+geopandas>=0.14.0
+shapely>=2.0.0
+pyproj>=3.6.0
+fiona>=1.9.0
+
+# Clustering & Machine Learning
+scikit-learn>=1.3.0
+hdbscan>=0.8.33
+
+# Network Analysis
+osmnx>=1.6.0
+networkx>=3.1
+pandana>=0.7.0  # Optional: faster accessibility analysis
+
+# GTFS Processing (choose based on needs)
+# peartree>=0.6.2  # GTFS to network conversion
+# gtfs-kit>=5.0.0  # GTFS validation and analysis
+# r5py>=0.1.0  # Multi-modal routing (requires Java)
+
+# Spatial Indexing & Performance
+h3>=3.7.6  # Hexagonal spatial indexing
+rtree>=1.0.1  # R-tree spatial index
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+folium>=0.14.0
+contextily>=1.3.0  # Basemaps
+
+# Data Processing Utilities
+pyarrow>=12.0.0  # For Parquet files
+tqdm>=4.65.0  # Progress bars
+python-dotenv>=1.0.0  # Environment variables
+
+# Text Processing (for deduplication)
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.21.0
+
+# Web Application
+flask>=2.3.0  # Web demo application
+# fastapi>=0.100.0  # Alternative: API-first approach
+# uvicorn>=0.23.0  # For FastAPI
+# streamlit>=1.25.0  # Alternative: rapid prototyping
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Documentation
+jupyter>=1.0.0
+jupyterlab>=4.0.0
+nbstripout>=0.6.1  # Clean notebook outputs before commit
+
+# Code Quality
+black>=23.7.0  # Code formatter
+flake8>=6.1.0  # Linter
+isort>=5.12.0  # Import sorter

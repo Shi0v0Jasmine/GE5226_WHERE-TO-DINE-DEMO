@@ -1,0 +1,19 @@
+{
+  "total_trips": 28966800,
+  "date_range": {
+    "start": "2002-12-31 17:24:07",
+    "end": "2026-06-26 23:47:51"
+  },
+  "weight_stats": {
+    "mean": 0.7423888727784912,
+    "median": 0.7,
+    "min": 0.3,
+    "max": 1.5
+  },
+  "temporal_distribution": {
+    "breakfast": 4066870,
+    "lunch": 6191887,
+    "dinner": 13245790,
+    "late_night": 5462253
+  }
+}
