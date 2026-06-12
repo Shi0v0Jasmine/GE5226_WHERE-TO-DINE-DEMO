@@ -1,0 +1,40 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environments and secrets
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Runtime cache and logs
+cache/
+*.log
+outputs/logs/
+
+# Generated local outputs. Keep directory skeletons via .gitkeep.
+outputs/**/*.html
+outputs/**/*.png
+outputs/**/*.jpg
+outputs/**/*.jpeg
+outputs/**/*.csv
+outputs/**/*.json
+!outputs/**/.gitkeep
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Data policy:
+# The current demo repository tracks selected data files, including Git LFS
+# parquet/pbf assets. Do not ignore data/ wholesale unless the project moves
+# to a manifest/download-script workflow.
