@@ -26,9 +26,14 @@ from shapely.geometry import Point
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.config_loader import load_config, get_config_value
-from pandarallel import pandarallel
 
-pandarallel.initialize(progress_bar=True) # 初始化并行处理器，并显示一个进度条
+try:
+    from pandarallel import pandarallel
+    pandarallel.initialize(progress_bar=True)
+    _PANDARALLEL_AVAILABLE = True
+except ImportError:
+    _PANDARALLEL_AVAILABLE = False
+    logging.warning("pandarallel not installed. Using standard pandas apply.")
 
 # Setup logging
 logging.basicConfig(
@@ -162,12 +167,12 @@ def convert_ids_to_coords(df: pd.DataFrame, zones_path: str) -> pd.DataFrame:
     
     # 从“质心”的 Point 几何中提取 lon (.x) 和 lat (.y)
     logger.info("Extracting coordinates from centroids...")
-    # 旧的、慢速的代码
-    # df_merged['dropoff_lon'] = df_merged['centroid'].apply(lambda p: p.x if p and p.is_valid else None)
-    # df_merged['dropoff_lat'] = df_merged['centroid'].apply(lambda p: p.y if p and p.is_valid else None)
-    # 这是新的、并行的代码！
-    df_merged['dropoff_lon'] = df_merged['centroid'].parallel_apply(lambda p: p.x if p and p.is_valid else None)
-    df_merged['dropoff_lat'] = df_merged['centroid'].parallel_apply(lambda p: p.y if p and p.is_valid else None)
+    if _PANDARALLEL_AVAILABLE:
+        df_merged['dropoff_lon'] = df_merged['centroid'].parallel_apply(lambda p: p.x if p and p.is_valid else None)
+        df_merged['dropoff_lat'] = df_merged['centroid'].parallel_apply(lambda p: p.y if p and p.is_valid else None)
+    else:
+        df_merged['dropoff_lon'] = df_merged['centroid'].apply(lambda p: p.x if p and p.is_valid else None)
+        df_merged['dropoff_lat'] = df_merged['centroid'].apply(lambda p: p.y if p and p.is_valid else None)
     
     # 清理多余的列
     df_merged = df_merged.drop(columns=['LocationID', 'centroid'])
