@@ -46,6 +46,8 @@ from src.analysis.scoring import (
     compute_access_score_decay,
     compute_access_score_euclidean,
     compute_baseline_score,
+    compute_entropy_weights,
+    compute_topsis_ranking,
 )
 
 # Setup logging
@@ -104,28 +106,41 @@ def calculate_hotspot_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFr
         winsorize_pct=(0.01, 0.99)
     )
 
-    # Composite score with equal weights (demand = 0.5, poi = 0.5)
-    gdf_hotspots['popularity_score_v2'] = compute_composite_score(
-        demand_score=gdf_hotspots['taxi_score_v2'].values,
-        poi_score=gdf_hotspots['restaurant_score_v2'].values,
-        access_score=np.ones(len(gdf_hotspots)) * 50,  # placeholder, no access at this stage
-        weights={'demand': 0.5, 'poi': 0.5, 'access': 0.0, 'confidence': 0.0}
-    )
+    # -------------------------------------------------------------------
+    # Entropy-weighted TOPSIS (replaces fixed 0.5/0.5 weighting)
+    # -------------------------------------------------------------------
+    indicators = np.column_stack([
+        gdf_hotspots['restaurant_score_v2'].values,
+        gdf_hotspots['taxi_score_v2'].values
+    ])
+    # Ensure non-negative for entropy weights
+    indicators = np.clip(indicators, 0, None)
 
-    # Tie-breaker: popularity → taxi_density → restaurant_density → original order
-    gdf_hotspots = compute_tiebreaker_rank(
-        gdf_hotspots,
-        score_col='popularity_score_v2',
-        access_col='taxi_score_v2',
-        popularity_col='taxi_score_v2'
+    entropy_w = compute_entropy_weights(indicators)
+    topsis_scores = compute_topsis_ranking(
+        indicators,
+        weights=entropy_w,
+        benefit_criteria=[0, 1]  # both are benefit criteria
     )
-    gdf_hotspots['rank_v2'] = gdf_hotspots['rank'].astype(int)
-    gdf_hotspots = gdf_hotspots.drop(columns=['rank'], errors='ignore')
+    # TOPSIS returns [0, 1]; rescale to [0, 100] for consistency
+    gdf_hotspots['popularity_score_v2'] = topsis_scores * 100.0
+    gdf_hotspots['entropy_weight_restaurant'] = entropy_w[0]
+    gdf_hotspots['entropy_weight_taxi'] = entropy_w[1]
 
-    logger.info(f"V2 score statistics:")
+    # Tie-breaker: TOPSIS → taxi_score_v2 → restaurant_score_v2 → original index
+    gdf_v2_sorted = gdf_hotspots.sort_values(
+        by=['popularity_score_v2', 'taxi_score_v2', 'restaurant_score_v2'],
+        ascending=[False, False, False],
+        kind='mergesort'
+    ).reset_index(drop=True)
+    gdf_v2_sorted['rank_v2'] = np.arange(1, len(gdf_v2_sorted) + 1)
+    gdf_hotspots = gdf_v2_sorted
+
+    logger.info(f"V2 Entropy-TOPSIS score statistics:")
     logger.info(f"  Restaurant score: [{gdf_hotspots['restaurant_score_v2'].min():.1f}, {gdf_hotspots['restaurant_score_v2'].max():.1f}]")
     logger.info(f"  Taxi score: [{gdf_hotspots['taxi_score_v2'].min():.1f}, {gdf_hotspots['taxi_score_v2'].max():.1f}]")
-    logger.info(f"  Popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
+    logger.info(f"  TOPSIS popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
+    logger.info(f"  Entropy weights: restaurant={entropy_w[0]:.3f}, taxi={entropy_w[1]:.3f}")
 
     return gdf_hotspots
 
@@ -351,26 +366,42 @@ def calculate_composite_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoData
         winsorize=True, winsorize_pct=(0.01, 0.99)
     )
 
-    # Composite score with equal weights
-    gdf_hotspots['popularity_score_v2'] = (
-        0.5 * gdf_hotspots['restaurant_score_v2'] +
-        0.5 * gdf_hotspots['taxi_score_v2']
-    )
+    # -------------------------------------------------------------------
+    # Entropy-weighted TOPSIS (replaces fixed 0.5/0.5 weighting)
+    # -------------------------------------------------------------------
+    indicators = np.column_stack([
+        gdf_hotspots['restaurant_score_v2'].values,
+        gdf_hotspots['taxi_score_v2'].values
+    ])
+    # Ensure non-negative for entropy weights
+    indicators = np.clip(indicators, 0, None)
 
-    # Deterministic tie-breaker
-    gdf_hotspots = compute_tiebreaker_rank(
-        gdf_hotspots,
-        score_col='popularity_score_v2',
-        access_col='taxi_score_v2',
-        popularity_col='taxi_score_v2'
+    entropy_w = compute_entropy_weights(indicators)
+    topsis_scores = compute_topsis_ranking(
+        indicators,
+        weights=entropy_w,
+        benefit_criteria=[0, 1]  # both are benefit criteria
     )
-    gdf_hotspots['rank_v2'] = gdf_hotspots['rank'].astype(int)
-    gdf_hotspots = gdf_hotspots.drop(columns=['rank'], errors='ignore')
+    # TOPSIS returns [0, 1]; rescale to [0, 100] for consistency
+    gdf_hotspots['popularity_score_v2'] = topsis_scores * 100.0
+    gdf_hotspots['entropy_weight_restaurant'] = entropy_w[0]
+    gdf_hotspots['entropy_weight_taxi'] = entropy_w[1]
 
-    logger.info(f"V2 score statistics:")
+    # Tie-breaker: TOPSIS → taxi_score_v2 → restaurant_score_v2 → original index
+    # Manually create rank_v2 without overwriting v1's 'rank' column
+    gdf_v2_sorted = gdf_hotspots.sort_values(
+        by=['popularity_score_v2', 'taxi_score_v2', 'restaurant_score_v2'],
+        ascending=[False, False, False],
+        kind='mergesort'
+    ).reset_index(drop=True)
+    gdf_v2_sorted['rank_v2'] = np.arange(1, len(gdf_v2_sorted) + 1)
+    gdf_hotspots = gdf_v2_sorted
+
+    logger.info(f"V2 Entropy-TOPSIS score statistics:")
     logger.info(f"  Restaurant score: [{gdf_hotspots['restaurant_score_v2'].min():.1f}, {gdf_hotspots['restaurant_score_v2'].max():.1f}]")
     logger.info(f"  Taxi score: [{gdf_hotspots['taxi_score_v2'].min():.1f}, {gdf_hotspots['taxi_score_v2'].max():.1f}]")
-    logger.info(f"  Popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
+    logger.info(f"  TOPSIS popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
+    logger.info(f"  Entropy weights: restaurant={entropy_w[0]:.3f}, taxi={entropy_w[1]:.3f}")
 
     return gdf_hotspots
 

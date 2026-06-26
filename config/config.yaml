@@ -110,7 +110,7 @@ deduplication:
 intersection:
   # Filtering criteria for final hotspots
   min_area_sqm: 10000       # Minimum 10,000 m² (approx 2-3 NYC blocks)
-  min_overlap_ratio: 0.15   # Minimum 15% overlap between dining zones and taxi hotspots
+  min_overlap_ratio: 0.05    # Relaxed from 0.15: dining zones and taxi hotspots have low geometric overlap due to zone-centroid aggregation. See docs/stage1_report_2014_vs_2024.md.
 
 # ==================== NETWORK ANALYSIS ====================
 network:
