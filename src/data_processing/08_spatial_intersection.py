@@ -36,7 +36,17 @@ from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent.parent))
 from utils.config_loader import load_config, get_config_value
+from src.analysis.scoring import (
+    normalize_zscore_to_100,
+    compute_composite_score,
+    compute_tiebreaker_rank,
+    PREFERENCE_PROFILES,
+    compute_access_score_decay,
+    compute_access_score_euclidean,
+    compute_baseline_score,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -44,6 +54,80 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Scoring version 2 (robust, replaces max-normalization)
+# ---------------------------------------------------------------------------
+
+def calculate_hotspot_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Calculate robust composite scores using z-score + winsorization.
+
+    Replaces the unstable max-normalization with:
+    - z-score standardization + winsorization (1%, 99%)
+    - rescale to [0, 100]
+    - entropy-weighted composite (default: equal weights)
+    - deterministic tie-breaker
+
+    Parameters
+    ----------
+    gdf_hotspots : gpd.GeoDataFrame
+        Hotspots with n_restaurants, taxi_weight, intersection_area_sqm
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Hotspots with old and new score columns
+    """
+    logger.info("Calculating robust (v2) composite scores...")
+
+    if len(gdf_hotspots) == 0:
+        return gdf_hotspots
+
+    # Calculate raw densities
+    area_km2 = gdf_hotspots['intersection_area_sqm'] / 1_000_000
+    area_km2 = area_km2.replace(0, np.nan).fillna(1e-6)
+
+    gdf_hotspots['restaurant_density'] = gdf_hotspots['n_restaurants'] / area_km2
+    gdf_hotspots['taxi_density'] = gdf_hotspots['taxi_weight'] / area_km2
+
+    # Robust normalization: z-score + winsorization + rescale to [0, 100]
+    gdf_hotspots['restaurant_score_v2'] = normalize_zscore_to_100(
+        gdf_hotspots['restaurant_density'].values,
+        winsorize=True,
+        winsorize_pct=(0.01, 0.99)
+    )
+    gdf_hotspots['taxi_score_v2'] = normalize_zscore_to_100(
+        gdf_hotspots['taxi_density'].values,
+        winsorize=True,
+        winsorize_pct=(0.01, 0.99)
+    )
+
+    # Composite score with equal weights (demand = 0.5, poi = 0.5)
+    gdf_hotspots['popularity_score_v2'] = compute_composite_score(
+        demand_score=gdf_hotspots['taxi_score_v2'].values,
+        poi_score=gdf_hotspots['restaurant_score_v2'].values,
+        access_score=np.ones(len(gdf_hotspots)) * 50,  # placeholder, no access at this stage
+        weights={'demand': 0.5, 'poi': 0.5, 'access': 0.0, 'confidence': 0.0}
+    )
+
+    # Tie-breaker: popularity → taxi_density → restaurant_density → original order
+    gdf_hotspots = compute_tiebreaker_rank(
+        gdf_hotspots,
+        score_col='popularity_score_v2',
+        access_col='taxi_score_v2',
+        popularity_col='taxi_score_v2'
+    )
+    gdf_hotspots['rank_v2'] = gdf_hotspots['rank'].astype(int)
+    gdf_hotspots = gdf_hotspots.drop(columns=['rank'], errors='ignore')
+
+    logger.info(f"V2 score statistics:")
+    logger.info(f"  Restaurant score: [{gdf_hotspots['restaurant_score_v2'].min():.1f}, {gdf_hotspots['restaurant_score_v2'].max():.1f}]")
+    logger.info(f"  Taxi score: [{gdf_hotspots['taxi_score_v2'].min():.1f}, {gdf_hotspots['taxi_score_v2'].max():.1f}]")
+    logger.info(f"  Popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
+
+    return gdf_hotspots
 
 
 def load_spatial_data(
@@ -226,16 +310,77 @@ def apply_filtering_criteria(
     return gdf_filtered
 
 
+def calculate_composite_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Calculate robust composite scores using z-score + winsorization (v2).
+
+    Replaces the unstable max-normalization with:
+    - z-score standardization + winsorization (1%, 99%)
+    - rescale to [0, 100]
+    - deterministic tie-breaker
+
+    Parameters
+    ----------
+    gdf_hotspots : gpd.GeoDataFrame
+        Hotspots with n_restaurants, taxi_weight, intersection_area_sqm
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Hotspots with v2 score columns added
+    """
+    logger.info("Calculating robust (v2) composite scores...")
+
+    if len(gdf_hotspots) == 0:
+        return gdf_hotspots
+
+    # Calculate raw densities
+    area_km2 = gdf_hotspots['intersection_area_sqm'] / 1_000_000
+    area_km2 = area_km2.replace(0, np.nan).fillna(1e-6)
+
+    gdf_hotspots['restaurant_density'] = gdf_hotspots['n_restaurants'] / area_km2
+    gdf_hotspots['taxi_density'] = gdf_hotspots['taxi_weight'] / area_km2
+
+    # Robust normalization: z-score + winsorization + rescale to [0, 100]
+    gdf_hotspots['restaurant_score_v2'] = normalize_zscore_to_100(
+        gdf_hotspots['restaurant_density'].values,
+        winsorize=True, winsorize_pct=(0.01, 0.99)
+    )
+    gdf_hotspots['taxi_score_v2'] = normalize_zscore_to_100(
+        gdf_hotspots['taxi_density'].values,
+        winsorize=True, winsorize_pct=(0.01, 0.99)
+    )
+
+    # Composite score with equal weights
+    gdf_hotspots['popularity_score_v2'] = (
+        0.5 * gdf_hotspots['restaurant_score_v2'] +
+        0.5 * gdf_hotspots['taxi_score_v2']
+    )
+
+    # Deterministic tie-breaker
+    gdf_hotspots = compute_tiebreaker_rank(
+        gdf_hotspots,
+        score_col='popularity_score_v2',
+        access_col='taxi_score_v2',
+        popularity_col='taxi_score_v2'
+    )
+    gdf_hotspots['rank_v2'] = gdf_hotspots['rank'].astype(int)
+    gdf_hotspots = gdf_hotspots.drop(columns=['rank'], errors='ignore')
+
+    logger.info(f"V2 score statistics:")
+    logger.info(f"  Restaurant score: [{gdf_hotspots['restaurant_score_v2'].min():.1f}, {gdf_hotspots['restaurant_score_v2'].max():.1f}]")
+    logger.info(f"  Taxi score: [{gdf_hotspots['taxi_score_v2'].min():.1f}, {gdf_hotspots['taxi_score_v2'].max():.1f}]")
+    logger.info(f"  Popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
+
+    return gdf_hotspots
+
+
 def calculate_composite_scores(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Calculate composite popularity scores for each hotspot.
+    Calculate composite popularity scores for each hotspot (legacy v1).
 
-    Combines:
-    - Restaurant density (normalized)
-    - Taxi activity (normalized)
-
-    Score components:
-    - Popularity = 0.5 × restaurant_density_norm + 0.5 × taxi_activity_norm
+    Uses max-normalization, which is unstable to outliers.
+    Kept for backward compatibility and A/B comparison.
 
     Parameters:
     -----------
@@ -247,7 +392,7 @@ def calculate_composite_scores(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFra
     gpd.GeoDataFrame
         Hotspots with composite scores
     """
-    logger.info("Calculating composite popularity scores...")
+    logger.info("Calculating composite popularity scores (v1 legacy)...")
 
     if len(gdf_hotspots) == 0:
         return gdf_hotspots
@@ -376,8 +521,8 @@ def save_outputs(
     print(f"  Taxi hotspots: {analysis['input_data']['n_taxi_hotspots']}")
     print(f"\nFinal Hotspots:")
     print(f"  Total hotspots: {analysis['final_hotspots']['n_hotspots']}")
-    print(f"  Total area: {analysis['final_hotspots']['total_area_sqkm']:.2f} km²")
-    print(f"  Average hotspot size: {analysis['final_hotspots']['avg_area_sqm']:,.0f} m²")
+    print(f"  Total area: {analysis['final_hotspots']['total_area_sqkm']:.2f} km^2")
+    print(f"  Average hotspot size: {analysis['final_hotspots']['avg_area_sqm']:,.0f} m^2")
     print(f"  Total restaurants: {analysis['final_hotspots']['total_restaurants']}")
     print(f"  Total taxi dropoffs: {analysis['final_hotspots']['total_taxi_dropoffs']}")
 
@@ -387,9 +532,67 @@ def save_outputs(
             print(f"  #{i+1}: Score {hotspot['popularity_score']:.1f} | "
                   f"{hotspot['n_restaurants']} restaurants | "
                   f"{hotspot['n_taxi_dropoffs']:,} taxi dropoffs | "
-                  f"{hotspot['area_sqkm']:.3f} km²")
+                  f"{hotspot['area_sqkm']:.3f} km^2")
 
     print("="*60 + "\n")
+
+
+def save_v2_outputs(
+    gdf_hotspots: gpd.GeoDataFrame,
+    gdf_dining: gpd.GeoDataFrame,
+    gdf_taxi: gpd.GeoDataFrame,
+    output_dir: str
+):
+    """
+    Save v2 (robust scoring) hotspots as a separate file for comparison.
+    
+    Also saves a JSON with v2-specific analysis metrics.
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Save v2 final hotspots
+    gdf_hotspots_wgs84 = gdf_hotspots.to_crs("EPSG:4326")
+    hotspots_v2_path = output_path / "final_hotspots_v2.geojson"
+    gdf_hotspots_wgs84.to_file(hotspots_v2_path, driver="GeoJSON")
+    logger.info(f"Saved v2 final hotspots: {hotspots_v2_path}")
+
+    # V2 analysis JSON
+    analysis_v2 = {
+        'scoring_version': 'v2',
+        'method': 'z-score + winsorization (1%, 99%) + min-max rescale',
+        'final_hotspots': {
+            'n_hotspots': int(len(gdf_hotspots)),
+            'total_area_sqkm': float(gdf_hotspots['intersection_area_sqm'].sum() / 1_000_000) if len(gdf_hotspots) > 0 else 0,
+            'total_restaurants': int(gdf_hotspots['n_restaurants'].sum()) if len(gdf_hotspots) > 0 else 0,
+            'total_taxi_dropoffs': int(gdf_hotspots['n_taxi_dropoffs'].sum()) if len(gdf_hotspots) > 0 else 0,
+        },
+        'top_hotspots_v2': []
+    }
+
+    if len(gdf_hotspots) > 0 and 'popularity_score_v2' in gdf_hotspots.columns:
+        top_10_v2 = gdf_hotspots.nsmallest(10, 'rank_v2')
+        for idx, row in top_10_v2.iterrows():
+            centroid = row.geometry.centroid
+            centroid_wgs84 = gpd.GeoSeries([centroid], crs="EPSG:2263").to_crs("EPSG:4326").iloc[0]
+
+            analysis_v2['top_hotspots_v2'].append({
+                'rank_v2': int(row['rank_v2']),
+                'popularity_score_v2': float(row['popularity_score_v2']),
+                'restaurant_score_v2': float(row['restaurant_score_v2']),
+                'taxi_score_v2': float(row['taxi_score_v2']),
+                'n_restaurants': int(row['n_restaurants']),
+                'n_taxi_dropoffs': int(row['n_taxi_dropoffs']),
+                'area_sqkm': float(row['intersection_area_sqm'] / 1_000_000),
+                'avg_rating': float(row['avg_rating']) if pd.notna(row.get('avg_rating')) else None,
+                'centroid_lat': float(centroid_wgs84.y),
+                'centroid_lon': float(centroid_wgs84.x)
+            })
+
+    analysis_v2_path = output_path / "intersection_analysis_v2.json"
+    with open(analysis_v2_path, 'w') as f:
+        json.dump(analysis_v2, f, indent=2)
+    logger.info(f"Saved v2 analysis: {analysis_v2_path}")
 
 
 def main():
@@ -432,13 +635,20 @@ def main():
         min_overlap_ratio=min_overlap_ratio
     )
 
-    # Step 4: Calculate composite scores
-    logger.info("\n[Step 4/5] Calculating composite scores...")
+    # Step 4: Calculate composite scores (v1 + v2)
+    logger.info("\n[Step 4/5] Calculating composite scores (v1 legacy)...")
     gdf_hotspots = calculate_composite_scores(gdf_hotspots)
 
-    # Step 5: Save outputs
+    logger.info("\n[Step 4b/5] Calculating composite scores (v2 robust)...")
+    gdf_hotspots = calculate_composite_scores_v2(gdf_hotspots)
+
+    # Step 5: Save outputs (v1 as default, v2 as comparison)
     logger.info("\n[Step 5/5] Saving outputs...")
     save_outputs(gdf_hotspots, gdf_dining, gdf_taxi, output_dir)
+
+    # Step 5b: Save v2 analysis separately for comparison
+    logger.info("\n[Step 5b/5] Saving v2 comparison outputs...")
+    save_v2_outputs(gdf_hotspots, gdf_dining, gdf_taxi, output_dir)
 
     logger.info("\n✅ Spatial intersection completed successfully!")
 

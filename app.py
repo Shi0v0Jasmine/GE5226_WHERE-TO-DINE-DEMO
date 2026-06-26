@@ -156,34 +156,70 @@ def get_recommendations():
             "recommendations": []
         })
 
-    # Calculate recommendation score
-    # Combined score: popularity (60%) + accessibility (40% based on inverse distance)
-    max_dist = hotspots_nearby['distance_km'].max()
-    if max_dist > 0:
-        hotspots_nearby['accessibility_score'] = 100 * (1 - hotspots_nearby['distance_km'] / max_dist)
-    else:
-        hotspots_nearby['accessibility_score'] = 100
+    # Calculate recommendation score with stable travel-time decay
+    # Use OSMnx network travel time when available, otherwise Euclidean fallback
+    access_method = request.args.get('access_method', 'decay')
+    user_profile = request.args.get('profile', 'balanced')
 
-    hotspots_nearby['recommendation_score'] = (
-        0.6 * hotspots_nearby['popularity_score'] +
-        0.4 * hotspots_nearby['accessibility_score']
-    )
+    try:
+        from src.analysis.scoring import compute_access_score_decay, compute_access_score_euclidean, get_profile_weights
 
-    # Sort by recommendation score
+        if access_method == 'decay':
+            hotspots_nearby['accessibility_score'] = compute_access_score_decay(
+                hotspots_nearby['distance_km'].values * 12,  # rough conversion: 1 km walk ~ 12 min
+                max_time_min=30.0,
+                decay_type='exponential',
+                lambda_param=0.3
+            )
+        else:
+            # Legacy: unstable Euclidean-based accessibility
+            max_dist = hotspots_nearby['distance_km'].max()
+            hotspots_nearby['accessibility_score'] = compute_access_score_euclidean(
+                hotspots_nearby['distance_km'].values,
+                max_distance_km=max_dist if max_dist > 0 else 2.0
+            )
+
+        # Get preference profile weights
+        weights = get_profile_weights(user_profile)
+
+        # Compute composite recommendation score
+        from src.analysis.scoring import compute_composite_score
+        hotspots_nearby['recommendation_score'] = compute_composite_score(
+            demand_score=hotspots_nearby['popularity_score'].values,
+            poi_score=hotspots_nearby['popularity_score'].values,  # reuse for now
+            access_score=hotspots_nearby['accessibility_score'].values,
+            weights=weights
+        )
+
+    except ImportError:
+        # Fallback to legacy scoring if scoring module unavailable
+        max_dist = hotspots_nearby['distance_km'].max()
+        if max_dist > 0:
+            hotspots_nearby['accessibility_score'] = 100 * (1 - hotspots_nearby['distance_km'] / max_dist)
+        else:
+            hotspots_nearby['accessibility_score'] = 100
+        hotspots_nearby['recommendation_score'] = (
+            0.6 * hotspots_nearby['popularity_score'] +
+            0.4 * hotspots_nearby['accessibility_score']
+        )
+
+    # Sort by recommendation score (tie-breaker via stable sort)
     hotspots_nearby = hotspots_nearby.sort_values(
         'recommendation_score',
-        ascending=False
+        ascending=False,
+        kind='mergesort'
     ).head(limit)
 
-    # Prepare response
+    # Prepare response with profile info
     recommendations = []
-    for idx, row in hotspots_nearby.iterrows():
+    for i, (idx, row) in enumerate(hotspots_nearby.iterrows(), start=1):
         centroid = row.geometry.centroid
 
         recommendations.append({
-            'rank': int(row.get('rank', 0)),
+            'rank': i,  # deterministic 1-based rank
             'popularity_score': float(row.get('popularity_score', 0)),
             'recommendation_score': float(row['recommendation_score']),
+            'accessibility_score': float(row['accessibility_score']),
             'distance_km': float(row['distance_km']),
             'n_restaurants': int(row.get('n_restaurants', 0)),
             'n_taxi_dropoffs': int(row.get('n_taxi_dropoffs', 0)),
@@ -200,6 +236,8 @@ def get_recommendations():
             "lon": user_lon
         },
         "search_radius_km": max_distance_km,
+        "profile": user_profile,
+        "access_method": access_method,
         "total_found": len(recommendations),
         "recommendations": recommendations
     })

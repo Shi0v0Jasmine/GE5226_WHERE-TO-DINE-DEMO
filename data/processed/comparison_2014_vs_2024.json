@@ -1,0 +1,414 @@
+{
+  "experiment": "2014 coordinate-level vs 2024 zone-centroid",
+  "timestamp": "2026-06-26 13:41:08.801048",
+  "count_metrics": {
+    "n_hotspots_2024": 233,
+    "n_hotspots_2014": 63,
+    "difference": -170,
+    "pct_change": -72.96137339055794
+  },
+  "area_metrics": {
+    "total_area_km2_2024": 63.03414069469598,
+    "total_area_km2_2014": 1689.2672082546824,
+    "avg_area_km2_2024": 0.27053279268109864,
+    "avg_area_km2_2014": 26.813765210391782,
+    "median_area_km2_2024": 0.07057234103758726,
+    "median_area_km2_2014": 4.935621876804874,
+    "std_area_km2_2024": 1.7662664145002889,
+    "std_area_km2_2014": 72.77495576000354,
+    "min_area_km2_2024": 0.07057234103665011,
+    "min_area_km2_2014": 0.40218938167935947,
+    "max_area_km2_2024": 21.241941910367593,
+    "max_area_km2_2014": 474.82991828545585
+  },
+  "dropoff_metrics": {
+    "dropoffs_total_2024": 2057299,
+    "dropoffs_total_2014": 272400,
+    "dropoffs_mean_2024": 8829.609442060086,
+    "dropoffs_mean_2014": 4323.809523809524,
+    "dropoffs_median_2024": 708.0,
+    "dropoffs_median_2014": 142.0,
+    "weight_total_2024": 1507298,
+    "weight_total_2014": 183661,
+    "weight_mean_2024": 6469.092703862661,
+    "weight_mean_2014": 2915.253968253968,
+    "weight_median_2024": 530.0,
+    "weight_median_2014": 92.6
+  },
+  "overlap_metrics": {
+    "iou": 0.00591161191012847,
+    "jaccard": 0.0059116119101284646,
+    "intersection_area_km2": 10.209525090739108,
+    "union_area_km2": 1727.0289805809052,
+    "area_2024_km2": 63.03414069469597,
+    "area_2014_km2": 1674.2043649769496,
+    "n_overlapping_pairs": 118,
+    "avg_pairwise_iou": 0.0026834887402986457,
+    "pairwise_overlaps": [
+      {
+        "hotspot_2014": 0,
+        "hotspot_2024": 24,
+        "iou": 0.0010168542796042577,
+        "intersection_area_km2": 0.0705723410375716,
+        "union_area_km2": 69.40261004264754
+      },
+      {
+        "hotspot_2014": 0,
+        "hotspot_2024": 26,
+        "iou": 0.0010168542795988744,
+        "intersection_area_km2": 0.07057234103719796,
+        "union_area_km2": 69.40261004264754
+      },
+      {
+        "hotspot_2014": 6,
+        "hotspot_2024": 8,
+        "iou": 0.07628659865663566,
+        "intersection_area_km2": 0.07051053157174214,
+        "union_area_km2": 0.9242846425636112
+      },
+      {
+        "hotspot_2014": 9,
+        "hotspot_2024": 64,
+        "iou": 0.0007746359186122782,
+        "intersection_area_km2": 0.06001868818197749,
+        "union_area_km2": 77.47986730269103
+      },
+      {
+        "hotspot_2014": 9,
+        "hotspot_2024": 118,
+        "iou": 0.01421437112054106,
+        "intersection_area_km2": 1.1011775746723562,
+        "union_area_km2": 77.4693136498353
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 81,
+        "iou": 0.003488451733259553,
+        "intersection_area_km2": 0.502996373767547,
+        "union_area_km2": 144.18900194945664
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 98,
+        "iou": 0.0004922508888128691,
+        "intersection_area_km2": 0.07057234103781389,
+        "union_area_km2": 143.36660967338997
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 99,
+        "iou": 0.0004922508888135084,
+        "intersection_area_km2": 0.07057234103790554,
+        "union_area_km2": 143.36660967338997
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 120,
+        "iou": 0.000492250888812911,
+        "intersection_area_km2": 0.07057234103781991,
+        "union_area_km2": 143.36660967338997
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 121,
+        "iou": 0.0004922508888104981,
+        "intersection_area_km2": 0.07057234103747398,
+        "union_area_km2": 143.36660967338997
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 122,
+        "iou": 0.0004922508888124588,
+        "intersection_area_km2": 0.07057234103775507,
+        "union_area_km2": 143.36660967338997
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 165,
+        "iou": 0.000191398551403421,
+        "intersection_area_km2": 0.02744841526802982,
+        "union_area_km2": 143.40973359916043
+      },
+      {
+        "hotspot_2014": 10,
+        "hotspot_2024": 187,
+        "iou": 1.3547176740521418e-05,
+        "intersection_area_km2": 0.0019431425318164775,
+        "union_area_km2": 143.4352388718956
+      },
+      {
+        "hotspot_2014": 11,
+        "hotspot_2024": 32,
+        "iou": 0.0012050667033945259,
+        "intersection_area_km2": 0.07057234103714512,
+        "union_area_km2": 58.56301633623387
+      },
+      {
+        "hotspot_2014": 12,
+        "hotspot_2024": 75,
+        "iou": 0.0045635619291182,
+        "intersection_area_km2": 0.07057234103756248,
+        "union_area_km2": 15.464311021456636
+      },
+      {
+        "hotspot_2014": 13,
+        "hotspot_2024": 177,
+        "iou": 0.0027641877406299744,
+        "intersection_area_km2": 0.07057234103734344,
+        "union_area_km2": 25.530950738266277
+      },
+      {
+        "hotspot_2014": 13,
+        "hotspot_2024": 198,
+        "iou": 0.0027641877406234332,
+        "intersection_area_km2": 0.07057234103717644,
+        "union_area_km2": 25.530950738266277
+      },
+      {
+        "hotspot_2014": 14,
+        "hotspot_2024": 89,
+        "iou": 0.003404432504448986,
+        "intersection_area_km2": 0.07057234103797824,
+        "union_area_km2": 20.729546244712676
+      },
+      {
+        "hotspot_2014": 15,
+        "hotspot_2024": 110,
+        "iou": 0.002584155349491827,
+        "intersection_area_km2": 0.07057234103825899,
+        "union_area_km2": 27.309635642507722
+      },
+      {
+        "hotspot_2014": 15,
+        "hotspot_2024": 111,
+        "iou": 0.0017487759056235399,
+        "intersection_area_km2": 0.047798259567921025,
+        "union_area_km2": 27.332409723976717
+      },
+      {
+        "hotspot_2014": 16,
+        "hotspot_2024": 189,
+        "iou": 0.007900943001292914,
+        "intersection_area_km2": 0.07057234103744833,
+        "union_area_km2": 8.932141521069047
+      },
+      {
+        "hotspot_2014": 18,
+        "hotspot_2024": 192,
+        "iou": 0.02860746463436285,
+        "intersection_area_km2": 0.07057234103765397,
+        "union_area_km2": 2.4669205027307295
+      },
+      {
+        "hotspot_2014": 19,
+        "hotspot_2024": 148,
+        "iou": 0.005493413379251843,
+        "intersection_area_km2": 0.07057234103734027,
+        "union_area_km2": 12.846719546700422
+      },
+      {
+        "hotspot_2014": 21,
+        "hotspot_2024": 117,
+        "iou": 0.008033971093069678,
+        "intersection_area_km2": 0.07057234103707445,
+        "union_area_km2": 8.78424134460131
+      },
+      {
+        "hotspot_2014": 22,
+        "hotspot_2024": 51,
+        "iou": 0.0019340802792523991,
+        "intersection_area_km2": 0.0705723410376971,
+        "union_area_km2": 36.48883750832524
+      },
+      {
+        "hotspot_2014": 22,
+        "hotspot_2024": 52,
+        "iou": 6.925635138161047e-05,
+        "intersection_area_km2": 0.0025317959918789664,
+        "union_area_km2": 36.55687805337129
+      },
+      {
+        "hotspot_2014": 23,
+        "hotspot_2024": 132,
+        "iou": 0.010873136227176373,
+        "intersection_area_km2": 0.07057234103760353,
+        "union_area_km2": 6.490523025106102
+      },
+      {
+        "hotspot_2014": 30,
+        "hotspot_2024": 151,
+        "iou": 0.011442553875341025,
+        "intersection_area_km2": 0.07057234103665012,
+        "union_area_km2": 6.167534084216566
+      },
+      {
+        "hotspot_2014": 32,
+        "hotspot_2024": 129,
+        "iou": 0.006409633976931339,
+        "intersection_area_km2": 0.07057234103813018,
+        "union_area_km2": 11.01035430293279
+      },
+      {
+        "hotspot_2014": 36,
+        "hotspot_2024": 79,
+        "iou": 0.0007611071075845642,
+        "intersection_area_km2": 0.005659009053569818,
+        "union_area_km2": 7.435233487083241
+      },
+      {
+        "hotspot_2014": 36,
+        "hotspot_2024": 80,
+        "iou": 0.009575206985841583,
+        "intersection_area_km2": 0.07057234103698946,
+        "union_area_km2": 7.370320155098635
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 4,
+        "iou": 0.00023187007613828298,
+        "intersection_area_km2": 0.07057234103764444,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 91,
+        "iou": 0.00023187007613759917,
+        "intersection_area_km2": 0.07057234103743631,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 94,
+        "iou": 0.00023187007613778077,
+        "intersection_area_km2": 0.07057234103749159,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 105,
+        "iou": 2.4055767956914296e-07,
+        "intersection_area_km2": 7.323347278266215e-05,
+        "union_area_km2": 304.432071816742
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 115,
+        "iou": 0.00023187007613788914,
+        "intersection_area_km2": 0.07057234103752458,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 127,
+        "iou": 0.00023187007613959136,
+        "intersection_area_km2": 0.07057234103804266,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 130,
+        "iou": 0.00023187007613777446,
+        "intersection_area_km2": 0.07057234103748966,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 131,
+        "iou": 0.0002318700761354646,
+        "intersection_area_km2": 0.07057234103678663,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 138,
+        "iou": 0.00023187007613861718,
+        "intersection_area_km2": 0.07057234103774615,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 139,
+        "iou": 0.00023187007613850272,
+        "intersection_area_km2": 0.07057234103771132,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 140,
+        "iou": 0.0002318700761380626,
+        "intersection_area_km2": 0.07057234103757737,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 141,
+        "iou": 0.0002318700761403989,
+        "intersection_area_km2": 0.07057234103828845,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 142,
+        "iou": 0.00023187007613773258,
+        "intersection_area_km2": 0.07057234103747692,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 155,
+        "iou": 0.0002318700761379233,
+        "intersection_area_km2": 0.07057234103753496,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 156,
+        "iou": 0.0002318700761380203,
+        "intersection_area_km2": 0.07057234103756449,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 157,
+        "iou": 0.0002318700761395417,
+        "intersection_area_km2": 0.07057234103802755,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 169,
+        "iou": 0.00023187007613724068,
+        "intersection_area_km2": 0.07057234103732721,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 179,
+        "iou": 0.00023187007613812663,
+        "intersection_area_km2": 0.07057234103759685,
+        "union_area_km2": 304.3615727091771
+      },
+      {
+        "hotspot_2014": 40,
+        "hotspot_2024": 180,
+        "iou": 0.00023187007613771946,
+        "intersection_area_km2": 0.07057234103747292,
+        "union_area_km2": 304.3615727091771
+      }
+    ]
+  },
+  "density_compactness": {
+    "2024": {
+      "density_mean": 124826.77397293296,
+      "density_median": 9763.031661830824,
+      "compactness_mean": 0.9665513229958055,
+      "compactness_median": 0.9991966804850723
+    },
+    "2014": {
+      "density_mean": 90.60190760873682,
+      "density_median": 43.722709492728995,
+      "compactness_mean": 0.7948545411770165,
+      "compactness_median": 0.8043253990363612
+    }
+  }
+}
