@@ -1,16 +1,117 @@
 {
   "input_data": {
     "n_dining_zones": 189,
-    "n_taxi_hotspots": 233,
+    "n_taxi_hotspots": 63,
     "dining_total_area_sqkm": 1930.5755054897459,
-    "taxi_total_area_sqkm": 63.03414069469597
+    "taxi_total_area_sqkm": 1689.2672082546826
   },
   "final_hotspots": {
-    "n_hotspots": 0,
-    "total_area_sqkm": 0.0,
-    "avg_area_sqm": 0,
-    "total_restaurants": 0,
-    "total_taxi_dropoffs": 0
+    "n_hotspots": 62,
+    "total_area_sqkm": 362.9494329618385,
+    "avg_area_sqm": 5854023.112287718,
+    "total_restaurants": 7000,
+    "total_taxi_dropoffs": 527464
   },
-  "top_hotspots": []
+  "top_hotspots": [
+    {
+      "rank": 1,
+      "popularity_score": 58.45206451412354,
+      "n_restaurants": 36,
+      "n_taxi_dropoffs": 272,
+      "area_sqkm": 0.17144067298604473,
+      "avg_rating": 2.5863636363636364,
+      "centroid_lat": 40.64640025808865,
+      "centroid_lon": -73.79073674344326
+    },
+    {
+      "rank": 2,
+      "popularity_score": 52.98471818537087,
+      "n_restaurants": 363,
+      "n_taxi_dropoffs": 246900,
+      "area_sqkm": 28.959073273352974,
+      "avg_rating": 4.235403726708074,
+      "centroid_lat": 40.788823594046285,
+      "centroid_lon": -73.97291741416271
+    },
+    {
+      "rank": 3,
+      "popularity_score": 50.42606559829213,
+      "n_restaurants": 753,
+      "n_taxi_dropoffs": 246900,
+      "area_sqkm": 32.27005745656799,
+      "avg_rating": 4.281151832460733,
+      "centroid_lat": 40.72219128673602,
+      "centroid_lon": -73.98984214683747
+    },
+    {
+      "rank": 4,
+      "popularity_score": 38.929294270749736,
+      "n_restaurants": 48,
+      "n_taxi_dropoffs": 577,
+      "area_sqkm": 0.37843005999460777,
+      "avg_rating": 2.5538461538461537,
+      "centroid_lat": 40.644439989373566,
+      "centroid_lon": -73.78213267709609
+    },
+    {
+      "rank": 5,
+      "popularity_score": 28.260561599722145,
+      "n_restaurants": 72,
+      "n_taxi_dropoffs": 622,
+      "area_sqkm": 0.7167786866005762,
+      "avg_rating": 3.3018181818181813,
+      "centroid_lat": 40.76793189948042,
+      "centroid_lon": -73.86238706983514
+    },
+    {
+      "rank": 6,
+      "popularity_score": 27.981183785166017,
+      "n_restaurants": 195,
+      "n_taxi_dropoffs": 90,
+      "area_sqkm": 1.6773606766740314,
+      "avg_rating": 4.106666666666667,
+      "centroid_lat": 40.74890730111826,
+      "centroid_lon": -73.88656214385544
+    },
+    {
+      "rank": 7,
+      "popularity_score": 25.11862242945103,
+      "n_restaurants": 171,
+      "n_taxi_dropoffs": 174,
+      "area_sqkm": 1.6634741454447208,
+      "avg_rating": 4.0109375,
+      "centroid_lat": 40.83457091723323,
+      "centroid_lon": -73.94343096747006
+    },
+    {
+      "rank": 8,
+      "popularity_score": 24.597536361545952,
+      "n_restaurants": 195,
+      "n_taxi_dropoffs": 81,
+      "area_sqkm": 1.9027340833480908,
+      "avg_rating": 4.106666666666667,
+      "centroid_lat": 40.74708623205416,
+      "centroid_lon": -73.89219408180179
+    },
+    {
+      "rank": 9,
+      "popularity_score": 23.414356850780784,
+      "n_restaurants": 195,
+      "n_taxi_dropoffs": 535,
+      "area_sqkm": 2.114350153987072,
+      "avg_rating": 4.106666666666667,
+      "centroid_lat": 40.745324565288826,
+      "centroid_lon": -73.90362606501724
+    },
+    {
+      "rank": 10,
+      "popularity_score": 22.50926645029446,
+      "n_restaurants": 99,
+      "n_taxi_dropoffs": 161,
+      "area_sqkm": 1.0901524582325222,
+      "avg_rating": 4.074509803921568,
+      "centroid_lat": 40.8031542213268,
+      "centroid_lon": -73.94878353257096
+    }
+  ]
 }

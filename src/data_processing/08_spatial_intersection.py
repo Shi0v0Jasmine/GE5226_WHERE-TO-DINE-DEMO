@@ -639,7 +639,8 @@ def main():
 
     # Define paths
     dining_zones_path = "data/processed/dining_zones.geojson"
-    taxi_hotspots_path = "data/processed/taxi_hotspots.geojson"
+    # Use 2014 coordinate-level taxi hotspots (better spatial resolution)
+    taxi_hotspots_path = "data/processed/taxi_hotspots_2014.geojson"
     output_dir = "data/processed"
 
     # Get filtering parameters
