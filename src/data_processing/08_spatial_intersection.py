@@ -367,11 +367,13 @@ def calculate_composite_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoData
     )
 
     # -------------------------------------------------------------------
-    # Entropy-weighted TOPSIS (replaces fixed 0.5/0.5 weighting)
+    # 4-Indicator Entropy-TOPSIS: restaurant + taxi + peak_time + accessibility
     # -------------------------------------------------------------------
     indicators = np.column_stack([
         gdf_hotspots['restaurant_score_v2'].values,
-        gdf_hotspots['taxi_score_v2'].values
+        gdf_hotspots['taxi_score_v2'].values,
+        gdf_hotspots['peak_time_score'].values,
+        gdf_hotspots['accessibility_proxy'].values
     ])
     # Ensure non-negative for entropy weights
     indicators = np.clip(indicators, 0, None)
@@ -380,18 +382,19 @@ def calculate_composite_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoData
     topsis_scores = compute_topsis_ranking(
         indicators,
         weights=entropy_w,
-        benefit_criteria=[0, 1]  # both are benefit criteria
+        benefit_criteria=[0, 1, 2, 3]  # all are benefit criteria
     )
     # TOPSIS returns [0, 1]; rescale to [0, 100] for consistency
     gdf_hotspots['popularity_score_v2'] = topsis_scores * 100.0
     gdf_hotspots['entropy_weight_restaurant'] = entropy_w[0]
     gdf_hotspots['entropy_weight_taxi'] = entropy_w[1]
+    gdf_hotspots['entropy_weight_peak_time'] = entropy_w[2]
+    gdf_hotspots['entropy_weight_accessibility'] = entropy_w[3]
 
-    # Tie-breaker: TOPSIS → taxi_score_v2 → restaurant_score_v2 → original index
-    # Manually create rank_v2 without overwriting v1's 'rank' column
+    # Tie-breaker: TOPSIS → taxi_score_v2 → peak_time_score → restaurant_score_v2
     gdf_v2_sorted = gdf_hotspots.sort_values(
-        by=['popularity_score_v2', 'taxi_score_v2', 'restaurant_score_v2'],
-        ascending=[False, False, False],
+        by=['popularity_score_v2', 'taxi_score_v2', 'peak_time_score', 'restaurant_score_v2'],
+        ascending=[False, False, False, False],
         kind='mergesort'
     ).reset_index(drop=True)
     gdf_v2_sorted['rank_v2'] = np.arange(1, len(gdf_v2_sorted) + 1)
@@ -400,8 +403,148 @@ def calculate_composite_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoData
     logger.info(f"V2 Entropy-TOPSIS score statistics:")
     logger.info(f"  Restaurant score: [{gdf_hotspots['restaurant_score_v2'].min():.1f}, {gdf_hotspots['restaurant_score_v2'].max():.1f}]")
     logger.info(f"  Taxi score: [{gdf_hotspots['taxi_score_v2'].min():.1f}, {gdf_hotspots['taxi_score_v2'].max():.1f}]")
+    logger.info(f"  Peak time score: [{gdf_hotspots['peak_time_score'].min():.1f}, {gdf_hotspots['peak_time_score'].max():.1f}]")
+    logger.info(f"  Accessibility proxy: [{gdf_hotspots['accessibility_proxy'].min():.1f}, {gdf_hotspots['accessibility_proxy'].max():.1f}]")
     logger.info(f"  TOPSIS popularity score: [{gdf_hotspots['popularity_score_v2'].min():.1f}, {gdf_hotspots['popularity_score_v2'].max():.1f}]")
-    logger.info(f"  Entropy weights: restaurant={entropy_w[0]:.3f}, taxi={entropy_w[1]:.3f}")
+    logger.info(f"  Entropy weights: restaurant={entropy_w[0]:.3f}, taxi={entropy_w[1]:.3f}, peak_time={entropy_w[2]:.3f}, accessibility={entropy_w[3]:.3f}")
+
+    return gdf_hotspots
+
+
+def add_peak_time_features(gdf_hotspots: gpd.GeoDataFrame, gdf_taxi: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Add peak-hour time-decay features to hotspots using 2014 taxi dropoff data.
+
+    Peak hour is defined as 17:00-23:00 (dinner/evening peak).
+    Computes peak_hour_ratio = peak_weight / total_weight for each hotspot.
+
+    Parameters
+    ----------
+    gdf_hotspots : gpd.GeoDataFrame
+        Filtered hotspots with 'taxi_hotspot_id' column
+    gdf_taxi : gpd.GeoDataFrame
+        Original taxi hotspots for spatial matching
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Hotspots with added 'peak_hour_ratio' and 'peak_time_score' columns
+    """
+    logger.info("Adding peak-time features from 2014 taxi data...")
+
+    if len(gdf_hotspots) == 0:
+        return gdf_hotspots
+
+    taxi_path = "data/interim/taxi_dropoffs_2014_weighted.parquet"
+    if not Path(taxi_path).exists():
+        logger.warning(f"  2014 taxi data not found: {taxi_path}")
+        gdf_hotspots['peak_hour_ratio'] = 0.5
+        gdf_hotspots['peak_time_score'] = 50.0
+        return gdf_hotspots
+
+    # Load 2014 taxi dropoffs
+    df = pd.read_parquet(taxi_path)
+
+    # Create GeoDataFrame from dropoff coordinates
+    gdf_dropoffs = gpd.GeoDataFrame(
+        df,
+        geometry=gpd.points_from_xy(df.dropoff_lon, df.dropoff_lat),
+        crs="EPSG:4326"
+    )
+
+    # Ensure taxi hotspots are in same CRS
+    gdf_taxi_wgs84 = gdf_taxi.to_crs("EPSG:4326")
+
+    # Spatial join: dropoffs within taxi hotspots
+    gdf_joined = gpd.sjoin(
+        gdf_dropoffs,
+        gdf_taxi_wgs84[['hotspot_id', 'geometry']].rename(columns={'hotspot_id': 'taxi_hotspot_id'}),
+        predicate='within',
+        how='inner'
+    )
+
+    # Peak hours: 17-23 (dinner/evening peak)
+    PEAK_HOURS = list(range(17, 24))
+    gdf_joined['is_peak'] = gdf_joined['hour'].isin(PEAK_HOURS)
+
+    # Aggregate total weight per hotspot
+    agg_total = gdf_joined.groupby('taxi_hotspot_id')['weight'].sum().reset_index(name='total_weight')
+    # Aggregate peak weight per hotspot
+    agg_peak = gdf_joined[gdf_joined['is_peak']].groupby('taxi_hotspot_id')['weight'].sum().reset_index(name='peak_weight')
+    # Merge and compute ratio
+    agg = agg_total.merge(agg_peak, on='taxi_hotspot_id', how='left')
+    agg['peak_weight'] = agg['peak_weight'].fillna(0)
+    agg['peak_hour_ratio'] = agg['peak_weight'] / agg['total_weight'].replace(0, np.nan)
+    agg['peak_hour_ratio'] = agg['peak_hour_ratio'].fillna(0.0)
+
+    # Merge to gdf_hotspots
+    gdf_hotspots = gdf_hotspots.merge(
+        agg[['taxi_hotspot_id', 'peak_hour_ratio', 'peak_weight']],
+        on='taxi_hotspot_id',
+        how='left'
+    )
+    gdf_hotspots['peak_hour_ratio'] = gdf_hotspots['peak_hour_ratio'].fillna(0.0)
+    gdf_hotspots['peak_weight'] = gdf_hotspots['peak_weight'].fillna(0.0)
+
+    # Normalize peak_hour_ratio to [0, 100] using z-score + winsorization
+    if gdf_hotspots['peak_hour_ratio'].max() > 0:
+        gdf_hotspots['peak_time_score'] = normalize_zscore_to_100(
+            gdf_hotspots['peak_hour_ratio'].values,
+            winsorize=True,
+            winsorize_pct=(0.01, 0.99)
+        )
+    else:
+        gdf_hotspots['peak_time_score'] = 50.0
+
+    logger.info(f"  Peak hour ratio: [{gdf_hotspots['peak_hour_ratio'].min():.3f}, {gdf_hotspots['peak_hour_ratio'].max():.3f}]")
+    logger.info(f"  Peak time score: [{gdf_hotspots['peak_time_score'].min():.1f}, {gdf_hotspots['peak_time_score'].max():.1f}]")
+
+    return gdf_hotspots
+
+
+def add_accessibility_proxy(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Compute accessibility proxy for each hotspot based on distance to Manhattan Midtown.
+
+    Uses Times Square (40.7580, -73.9855) as the reference point for NYC accessibility.
+    Distance is converted to a travel-time estimate (1 km ~ 12 min mixed walk+subway),
+    then scored with an exponential decay function.
+
+    Parameters
+    ----------
+    gdf_hotspots : gpd.GeoDataFrame
+        Hotspots with geometry
+
+    Returns
+    -------
+    gpd.GeoDataFrame
+        Hotspots with added 'distance_to_midtown_km' and 'accessibility_proxy' columns
+    """
+    logger.info("Computing accessibility proxy (distance to Manhattan Midtown)...")
+
+    if len(gdf_hotspots) == 0:
+        return gdf_hotspots
+
+    from shapely.geometry import Point
+
+    # Times Square as Manhattan reference point
+    midtown = Point(-73.9855, 40.7580)
+    midtown_gdf = gpd.GeoDataFrame([{'geometry': midtown}], crs="EPSG:4326")
+    midtown_proj = midtown_gdf.to_crs("EPSG:2263").geometry.iloc[0]
+
+    # Project hotspots and get centroids
+    gdf_proj = gdf_hotspots.to_crs("EPSG:2263")
+    centroids = gdf_proj.geometry.centroid
+
+    # Distance in km
+    distances_km = centroids.distance(midtown_proj) / 1000.0
+
+    # Compute accessibility score using exponential decay on distance (no hard threshold)
+    # 0.05 per km: 10 km → 60.7, 20 km → 36.8, 50 km → 8.2, 70 km → 3.0
+    gdf_hotspots['accessibility_proxy'] = 100.0 * np.exp(-0.05 * distances_km.values)
+
+    logger.info(f"  Distance to Midtown: [{distances_km.min():.1f}, {distances_km.max():.1f}] km")
+    logger.info(f"  Accessibility proxy: [{gdf_hotspots['accessibility_proxy'].min():.1f}, {gdf_hotspots['accessibility_proxy'].max():.1f}]")
 
     return gdf_hotspots
 
@@ -590,13 +733,19 @@ def save_v2_outputs(
 
     # V2 analysis JSON
     analysis_v2 = {
-        'scoring_version': 'v2',
-        'method': 'z-score + winsorization (1%, 99%) + min-max rescale',
+        'scoring_version': 'v2.1',
+        'method': 'entropy-weighted TOPSIS on 4 indicators: restaurant_density + taxi_density + peak_time_ratio + accessibility_proxy',
         'final_hotspots': {
             'n_hotspots': int(len(gdf_hotspots)),
             'total_area_sqkm': float(gdf_hotspots['intersection_area_sqm'].sum() / 1_000_000) if len(gdf_hotspots) > 0 else 0,
             'total_restaurants': int(gdf_hotspots['n_restaurants'].sum()) if len(gdf_hotspots) > 0 else 0,
             'total_taxi_dropoffs': int(gdf_hotspots['n_taxi_dropoffs'].sum()) if len(gdf_hotspots) > 0 else 0,
+        },
+        'entropy_weights': {
+            'restaurant': float(gdf_hotspots['entropy_weight_restaurant'].iloc[0]) if len(gdf_hotspots) > 0 and 'entropy_weight_restaurant' in gdf_hotspots.columns else None,
+            'taxi': float(gdf_hotspots['entropy_weight_taxi'].iloc[0]) if len(gdf_hotspots) > 0 and 'entropy_weight_taxi' in gdf_hotspots.columns else None,
+            'peak_time': float(gdf_hotspots['entropy_weight_peak_time'].iloc[0]) if len(gdf_hotspots) > 0 and 'entropy_weight_peak_time' in gdf_hotspots.columns else None,
+            'accessibility': float(gdf_hotspots['entropy_weight_accessibility'].iloc[0]) if len(gdf_hotspots) > 0 and 'entropy_weight_accessibility' in gdf_hotspots.columns else None,
         },
         'top_hotspots_v2': []
     }
@@ -612,6 +761,10 @@ def save_v2_outputs(
                 'popularity_score_v2': float(row['popularity_score_v2']),
                 'restaurant_score_v2': float(row['restaurant_score_v2']),
                 'taxi_score_v2': float(row['taxi_score_v2']),
+                'peak_time_score': float(row.get('peak_time_score', 0)),
+                'accessibility_proxy': float(row.get('accessibility_proxy', 0)),
+                'peak_hour_ratio': float(row.get('peak_hour_ratio', 0)),
+                'distance_to_midtown_km': float(row.get('distance_to_midtown_km', 0)),
                 'n_restaurants': int(row['n_restaurants']),
                 'n_taxi_dropoffs': int(row['n_taxi_dropoffs']),
                 'area_sqkm': float(row['intersection_area_sqm'] / 1_000_000),
@@ -666,6 +819,11 @@ def main():
         min_area_sqm=min_area_sqm,
         min_overlap_ratio=min_overlap_ratio
     )
+
+    # Step 3b: Add peak-time and accessibility features
+    logger.info("\n[Step 3b/5] Adding peak-time and accessibility features...")
+    gdf_hotspots = add_peak_time_features(gdf_hotspots, gdf_taxi)
+    gdf_hotspots = add_accessibility_proxy(gdf_hotspots)
 
     # Step 4: Calculate composite scores (v1 + v2)
     logger.info("\n[Step 4/5] Calculating composite scores (v1 legacy)...")

@@ -160,6 +160,8 @@ def get_recommendations():
     # Use OSMnx network travel time when available, otherwise Euclidean fallback
     access_method = request.args.get('access_method', 'decay')
     user_profile = request.args.get('profile', 'balanced')
+    time_profile = request.args.get('time_profile', 'any')  # any | lunch | dinner | late_night
+    version = request.args.get('version', 'v2')  # v1 | v2
 
     try:
         from src.analysis.scoring import compute_access_score_decay, compute_access_score_euclidean, get_profile_weights
@@ -179,14 +181,41 @@ def get_recommendations():
                 max_distance_km=max_dist if max_dist > 0 else 2.0
             )
 
+        # Select popularity score version
+        if version == 'v2' and 'popularity_score_v2' in hotspots_nearby.columns:
+            popularity_col = 'popularity_score_v2'
+        else:
+            popularity_col = 'popularity_score'
+
+        # Adjust demand score based on time profile
+        base_demand = hotspots_nearby[popularity_col].values
+        if time_profile == 'dinner' and 'peak_time_score' in hotspots_nearby.columns:
+            # Evening: boost areas with high peak-time activity
+            peak_time = hotspots_nearby['peak_time_score'].values
+            demand_score = 0.7 * base_demand + 0.3 * peak_time
+        elif time_profile == 'lunch' and 'restaurant_score_v2' in hotspots_nearby.columns:
+            # Lunch: slightly favor restaurant quality
+            poi = hotspots_nearby['restaurant_score_v2'].values
+            demand_score = 0.6 * base_demand + 0.4 * poi
+        else:
+            demand_score = base_demand
+
         # Get preference profile weights
         weights = get_profile_weights(user_profile)
+
+        # Adjust weights based on time profile
+        if time_profile == 'dinner':
+            weights = {'demand': 0.50, 'poi': 0.25, 'access': 0.15, 'confidence': 0.10}
+        elif time_profile == 'lunch':
+            weights = {'demand': 0.30, 'poi': 0.35, 'access': 0.25, 'confidence': 0.10}
+        elif time_profile == 'late_night':
+            weights = {'demand': 0.50, 'poi': 0.20, 'access': 0.20, 'confidence': 0.10}
 
         # Compute composite recommendation score
         from src.analysis.scoring import compute_composite_score
         hotspots_nearby['recommendation_score'] = compute_composite_score(
-            demand_score=hotspots_nearby['popularity_score'].values,
-            poi_score=hotspots_nearby['popularity_score'].values,  # reuse for now
+            demand_score=demand_score,
+            poi_score=base_demand,  # POI quality is the base popularity
             access_score=hotspots_nearby['accessibility_score'].values,
             weights=weights
         )
@@ -215,9 +244,9 @@ def get_recommendations():
     for i, (idx, row) in enumerate(hotspots_nearby.iterrows(), start=1):
         centroid = row.geometry.centroid
 
-        recommendations.append({
-            'rank': i,  # deterministic 1-based rank
-            'popularity_score': float(row.get('popularity_score', 0)),
+        rec = {
+            'rank': i,
+            'popularity_score': float(row.get(popularity_col, 0)),
             'recommendation_score': float(row['recommendation_score']),
             'accessibility_score': float(row['accessibility_score']),
             'distance_km': float(row['distance_km']),
@@ -228,7 +257,16 @@ def get_recommendations():
             'centroid_lat': float(centroid.y),
             'centroid_lon': float(centroid.x),
             'geometry': row.geometry.__geo_interface__
-        })
+        }
+        # Add v2-specific fields if available
+        if 'peak_time_score' in row:
+            rec['peak_time_score'] = float(row['peak_time_score'])
+        if 'accessibility_proxy' in row:
+            rec['accessibility_proxy'] = float(row['accessibility_proxy'])
+        if 'peak_hour_ratio' in row:
+            rec['peak_hour_ratio'] = float(row['peak_hour_ratio'])
+
+        recommendations.append(rec)
 
     return jsonify({
         "user_location": {
@@ -237,6 +275,8 @@ def get_recommendations():
         },
         "search_radius_km": max_distance_km,
         "profile": user_profile,
+        "time_profile": time_profile,
+        "version": version,
         "access_method": access_method,
         "total_found": len(recommendations),
         "recommendations": recommendations
