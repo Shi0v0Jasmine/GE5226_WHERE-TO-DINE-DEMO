@@ -17,11 +17,19 @@ Date: 2025-11-09
 import networkx as nx
 import osmnx as ox
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Point, Polygon
 from pathlib import Path
 import logging
 from typing import Tuple, List
 import numpy as np
+import sys
+
+# Allow importing from project root (config loader)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+from src.utils.config_loader import load_config, get_config_value
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,6 +43,7 @@ def load_network(network_path: str) -> nx.MultiDiGraph:
     -----------
     network_path : str
         Path to network file (.gpickle or .graphml)
+        Note: .gpickle is deprecated in NetworkX 3.0+; prefer .graphml.
 
     Returns:
     --------
@@ -49,7 +58,14 @@ def load_network(network_path: str) -> nx.MultiDiGraph:
     logger.info(f"Loading network from {network_path}...")
 
     if network_path.endswith('.gpickle'):
-        G = nx.read_gpickle(network_path)
+        try:
+            G = nx.read_gpickle(network_path)
+        except AttributeError:
+            # NetworkX 3.0+ removed read_gpickle
+            raise RuntimeError(
+                "nx.read_gpickle is unavailable in NetworkX >= 3.0. "
+                "Please convert the network to .graphml format or downgrade NetworkX."
+            )
     elif network_path.endswith('.graphml'):
         G = ox.load_graphml(network_path)
     else:
@@ -235,7 +251,7 @@ def calculate_walk_isochrone(
     origin_lat: float,
     origin_lon: float,
     travel_time_minutes: int = 15,
-    network_path: str = "data/processed/networks/network_walk.gpickle"
+    network_path: str = None
 ) -> gpd.GeoDataFrame:
     """
     Calculate walking isochrone.
@@ -248,14 +264,18 @@ def calculate_walk_isochrone(
         Origin longitude
     travel_time_minutes : int
         Travel time in minutes (default: 15)
-    network_path : str
-        Path to walking network file
+    network_path : str, optional
+        Path to walking network file. If None, reads from config.yaml.
 
     Returns:
     --------
     gpd.GeoDataFrame
         Isochrone polygon
     """
+    if network_path is None:
+        config = load_config()
+        network_path = get_config_value('data.processed.network_walk', config)
+
     G_walk = load_network(network_path)
 
     return calculate_isochrone(
@@ -271,7 +291,7 @@ def calculate_drive_isochrone(
     origin_lat: float,
     origin_lon: float,
     travel_time_minutes: int = 30,
-    network_path: str = "data/processed/networks/network_drive.gpickle"
+    network_path: str = None
 ) -> gpd.GeoDataFrame:
     """
     Calculate driving isochrone.
@@ -284,14 +304,18 @@ def calculate_drive_isochrone(
         Origin longitude
     travel_time_minutes : int
         Travel time in minutes (default: 30)
-    network_path : str
-        Path to driving network file
+    network_path : str, optional
+        Path to driving network file. If None, reads from config.yaml.
 
     Returns:
     --------
     gpd.GeoDataFrame
         Isochrone polygon
     """
+    if network_path is None:
+        config = load_config()
+        network_path = get_config_value('data.processed.network_drive', config)
+
     G_drive = load_network(network_path)
 
     return calculate_isochrone(
