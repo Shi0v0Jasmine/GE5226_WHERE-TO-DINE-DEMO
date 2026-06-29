@@ -156,30 +156,42 @@ def get_recommendations():
             "recommendations": []
         })
 
-    # Calculate recommendation score with stable travel-time decay
-    # Use OSMnx network travel time when available, otherwise Euclidean fallback
-    access_method = request.args.get('access_method', 'decay')
+    # Calculate recommendation score using unified TravelTimeCalculator
+    # Backend: proxy (default), osmnx (if graph available), google (if API key)
+    access_method = request.args.get('access_method', 'proxy')  # proxy | osmnx | google
     user_profile = request.args.get('profile', 'balanced')
     time_profile = request.args.get('time_profile', 'any')  # any | lunch | dinner | late_night
     version = request.args.get('version', 'v2')  # v1 | v2
+    travel_mode = request.args.get('mode', 'transit')  # walk | bike | drive | transit
 
     try:
-        from src.analysis.scoring import compute_access_score_decay, compute_access_score_euclidean, get_profile_weights
+        from src.travel_time import TravelTimeCalculator
+        from src.analysis.scoring import compute_access_score_decay, get_profile_weights
 
-        if access_method == 'decay':
-            hotspots_nearby['accessibility_score'] = compute_access_score_decay(
-                hotspots_nearby['distance_km'].values * 12,  # rough conversion: 1 km walk ~ 12 min
-                max_time_min=30.0,
-                decay_type='exponential',
-                lambda_param=0.3
-            )
-        else:
-            # Legacy: unstable Euclidean-based accessibility
-            max_dist = hotspots_nearby['distance_km'].max()
-            hotspots_nearby['accessibility_score'] = compute_access_score_euclidean(
-                hotspots_nearby['distance_km'].values,
-                max_distance_km=max_dist if max_dist > 0 else 2.0
-            )
+        # Initialize travel time calculator with selected backend
+        # Default: proxy (no dependencies). Auto-fallback if osmnx/google unavailable.
+        tt = TravelTimeCalculator(
+            mode=travel_mode,
+            backend=access_method,
+            graph_path=f"data/networks/nyc_{travel_mode}.graphml" if access_method == 'osmnx' else None,
+        )
+
+        # Compute travel times from user location to each hotspot
+        user_origin = (user_lat, user_lon)
+        hotspot_centroids = [
+            (float(row.geometry.centroid.y), float(row.geometry.centroid.x))
+            for _, row in hotspots_nearby.iterrows()
+        ]
+        travel_times = tt.matrix([user_origin], hotspot_centroids)[0]  # shape: (n_hotspots,)
+
+        # Convert travel time to accessibility score (0-100)
+        hotspots_nearby['accessibility_score'] = compute_access_score_decay(
+            travel_times,
+            max_time_min=30.0,
+            decay_type='exponential',
+            lambda_param=0.3
+        )
+        hotspots_nearby['travel_time_min'] = travel_times
 
         # Select popularity score version
         if version == 'v2' and 'popularity_score_v2' in hotspots_nearby.columns:
@@ -215,13 +227,15 @@ def get_recommendations():
         from src.analysis.scoring import compute_composite_score
         hotspots_nearby['recommendation_score'] = compute_composite_score(
             demand_score=demand_score,
-            poi_score=base_demand,  # POI quality is the base popularity
+            poi_score=base_demand,
             access_score=hotspots_nearby['accessibility_score'].values,
             weights=weights
         )
 
-    except ImportError:
-        # Fallback to legacy scoring if scoring module unavailable
+    except Exception as e:
+        # Fallback to legacy scoring if anything fails
+        logger = logging.getLogger(__name__)
+        logger.warning(f"TravelTimeCalculator failed ({e}), using legacy fallback")
         max_dist = hotspots_nearby['distance_km'].max()
         if max_dist > 0:
             hotspots_nearby['accessibility_score'] = 100 * (1 - hotspots_nearby['distance_km'] / max_dist)
@@ -231,6 +245,7 @@ def get_recommendations():
             0.6 * hotspots_nearby['popularity_score'] +
             0.4 * hotspots_nearby['accessibility_score']
         )
+        hotspots_nearby['travel_time_min'] = hotspots_nearby['distance_km'] * 12  # rough estimate
 
     # Sort by recommendation score (tie-breaker via stable sort)
     hotspots_nearby = hotspots_nearby.sort_values(
@@ -249,6 +264,7 @@ def get_recommendations():
             'popularity_score': float(row.get(popularity_col, 0)),
             'recommendation_score': float(row['recommendation_score']),
             'accessibility_score': float(row['accessibility_score']),
+            'travel_time_min': float(row.get('travel_time_min', row['distance_km'] * 12)),
             'distance_km': float(row['distance_km']),
             'n_restaurants': int(row.get('n_restaurants', 0)),
             'n_taxi_dropoffs': int(row.get('n_taxi_dropoffs', 0)),
@@ -277,7 +293,8 @@ def get_recommendations():
         "profile": user_profile,
         "time_profile": time_profile,
         "version": version,
-        "access_method": access_method,
+        "travel_mode": travel_mode,
+        "access_backend": access_method,
         "total_found": len(recommendations),
         "recommendations": recommendations
     })
