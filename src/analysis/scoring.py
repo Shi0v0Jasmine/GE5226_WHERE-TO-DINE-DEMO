@@ -19,10 +19,27 @@ Version: 2.0
 
 import numpy as np
 import pandas as pd
-from typing import Union, List, Dict, Optional
+from typing import Union, List, Dict, Optional, Sequence, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
+
+PRODUCT_COMPONENTS = ('demand', 'poi', 'time', 'confidence')
+
+
+def _as_finite_array(
+    values: Union[np.ndarray, pd.Series, Sequence[float]],
+    fill_value: Optional[float] = None
+) -> np.ndarray:
+    """Convert values to float and replace non-finite entries deterministically."""
+    arr = np.asarray(values, dtype=float)
+    finite = np.isfinite(arr)
+    if finite.all():
+        return arr
+
+    if fill_value is None:
+        fill_value = float(np.nanmedian(arr[finite])) if finite.any() else 0.0
+    return np.where(finite, arr, fill_value)
 
 
 # ---------------------------------------------------------------------------
@@ -48,9 +65,11 @@ def normalize_minmax(
     np.ndarray
         Scaled values in [0, 100]
     """
-    arr = np.asarray(values, dtype=float)
-    vmin = arr.min()
-    vmax = arr.max()
+    arr = _as_finite_array(values)
+    if arr.size == 0:
+        return arr
+    vmin = float(arr.min())
+    vmax = float(arr.max())
 
     if vmax == vmin:
         if clip:
@@ -82,7 +101,9 @@ def normalize_zscore(
     np.ndarray
         Z-scores (not bounded to [0, 100])
     """
-    arr = np.asarray(values, dtype=float)
+    arr = _as_finite_array(values)
+    if arr.size == 0:
+        return arr
 
     if winsorize:
         lower = np.nanpercentile(arr, winsorize_pct[0] * 100)
@@ -120,7 +141,9 @@ def normalize_percentile(
 
     Completely robust to outliers but loses magnitude information.
     """
-    arr = np.asarray(values, dtype=float)
+    arr = _as_finite_array(values)
+    if arr.size == 0:
+        return arr
     ranks = pd.Series(arr).rank(method='average', pct=True)
     return 100.0 * ranks.to_numpy()
 
@@ -133,9 +156,49 @@ def normalize_log1p(
 
     Useful for highly skewed count data (taxi drop-offs, etc.).
     """
-    arr = np.asarray(values, dtype=float)
+    arr = np.clip(_as_finite_array(values), 0, None)
     arr = np.log1p(arr)
     return normalize_minmax(arr)
+
+
+def normalize_robust_percentile(
+    values: Union[np.ndarray, pd.Series],
+    log_transform: bool = False,
+    winsorize_pct: Tuple[float, float] = (0.01, 0.99)
+) -> np.ndarray:
+    """Winsorize, optionally log-transform, then percentile-rank to [0, 100]."""
+    arr = _as_finite_array(values)
+    if arr.size == 0:
+        return arr
+    lower = float(np.quantile(arr, winsorize_pct[0]))
+    upper = float(np.quantile(arr, winsorize_pct[1]))
+    arr = np.clip(arr, lower, upper)
+    if log_transform:
+        arr = np.log1p(np.clip(arr, 0, None))
+    return normalize_percentile(arr)
+
+
+def compute_bayesian_rating(
+    ratings: Union[np.ndarray, pd.Series],
+    review_counts: Union[np.ndarray, pd.Series],
+    global_mean: Optional[float] = None,
+    prior_reviews: float = 50.0
+) -> np.ndarray:
+    """Shrink low-volume ratings toward the global mean."""
+    rating_arr = _as_finite_array(ratings)
+    reviews = np.clip(_as_finite_array(review_counts, fill_value=0.0), 0, None)
+    if global_mean is None:
+        valid = rating_arr[(rating_arr >= 1.0) & (rating_arr <= 5.0)]
+        global_mean = float(valid.mean()) if valid.size else 3.5
+    rating_arr = np.where(
+        (rating_arr >= 1.0) & (rating_arr <= 5.0),
+        rating_arr,
+        global_mean
+    )
+    return (
+        (reviews / (reviews + prior_reviews)) * rating_arr
+        + (prior_reviews / (reviews + prior_reviews)) * global_mean
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +252,26 @@ def compute_access_score_decay(
     # Apply hard threshold
     score = np.where(arr > max_time_min, 0.0, score)
     return score
+
+
+MODE_ACCESS_DEFAULTS = {
+    'walk': {'max_time_min': 30.0, 'half_life_min': 10.0},
+    'bike': {'max_time_min': 35.0, 'half_life_min': 15.0},
+    'drive': {'max_time_min': 45.0, 'half_life_min': 20.0},
+}
+
+
+def compute_access_score_half_life(
+    travel_time_min: Union[float, np.ndarray, pd.Series],
+    max_time_min: float,
+    half_life_min: float
+) -> Union[float, np.ndarray]:
+    """Stable exponential decay where the score halves at ``half_life_min``."""
+    if max_time_min <= 0 or half_life_min <= 0:
+        raise ValueError("max_time_min and half_life_min must be positive")
+    arr = np.clip(_as_finite_array(travel_time_min), 0, None)
+    score = 100.0 * np.exp(-np.log(2.0) * arr / half_life_min)
+    return np.where(arr > max_time_min, 0.0, score)
 
 
 def compute_access_score_euclidean(
@@ -272,6 +355,113 @@ def compute_composite_score(
         score += weights['confidence'] * conf
 
     return np.clip(score, 0, 100)
+
+
+PRODUCT_PROFILE_PRIORS = {
+    'balanced': {
+        'prior': np.array([0.35, 0.35, 0.15, 0.15]),
+        'access_weight': 0.30,
+    },
+    'quality_seeker': {
+        'prior': np.array([0.35, 0.45, 0.10, 0.10]),
+        'access_weight': 0.10,
+    },
+    'convenience': {
+        'prior': np.array([0.25, 0.30, 0.15, 0.30]),
+        'access_weight': 0.50,
+    },
+    'local_gem': {
+        'prior': np.array([0.15, 0.50, 0.15, 0.20]),
+        'access_weight': 0.20,
+    },
+    'late_night': {
+        'prior': np.array([0.30, 0.20, 0.40, 0.10]),
+        'access_weight': 0.20,
+    },
+}
+
+
+def regularize_entropy_weights(
+    entropy_weights: Union[np.ndarray, Sequence[float]],
+    prior_weights: Union[np.ndarray, Sequence[float]],
+    blend: float = 0.5,
+    floor: float = 0.10,
+    cap: float = 0.45
+) -> np.ndarray:
+    """Blend data-driven weights with a prior, clamp, and renormalize."""
+    if not 0 <= blend <= 1:
+        raise ValueError("blend must be between 0 and 1")
+    if not 0 <= floor < cap <= 1:
+        raise ValueError("weight bounds must satisfy 0 <= floor < cap <= 1")
+
+    entropy = _as_finite_array(entropy_weights)
+    prior = _as_finite_array(prior_weights)
+    if entropy.shape != prior.shape:
+        raise ValueError("entropy_weights and prior_weights must have equal shapes")
+    if entropy.size == 0:
+        return entropy
+
+    entropy = entropy / entropy.sum() if entropy.sum() > 0 else np.ones_like(entropy) / len(entropy)
+    prior = prior / prior.sum() if prior.sum() > 0 else np.ones_like(prior) / len(prior)
+    weights = blend * entropy + (1.0 - blend) * prior
+    weights = np.clip(weights, floor, cap)
+    for _ in range(100):
+        difference = 1.0 - weights.sum()
+        if abs(difference) < 1e-12:
+            break
+        if difference > 0:
+            adjustable = weights < cap - 1e-12
+        else:
+            adjustable = weights > floor + 1e-12
+        if not adjustable.any():
+            raise ValueError("Weight bounds cannot produce a unit-sum vector")
+        weights[adjustable] += difference / adjustable.sum()
+        weights = np.clip(weights, floor, cap)
+    return weights
+
+
+def compute_product_area_scores(
+    components: np.ndarray,
+    profile_name: str = 'balanced',
+    entropy_weights: Optional[np.ndarray] = None
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Compute constrained product-area TOPSIS scores and effective weights."""
+    X = np.asarray(components, dtype=float)
+    if X.ndim != 2 or X.shape[1] != len(PRODUCT_COMPONENTS):
+        raise ValueError(
+            f"components must have shape (n, {len(PRODUCT_COMPONENTS)})"
+        )
+    if profile_name not in PRODUCT_PROFILE_PRIORS:
+        raise ValueError(f"Unknown profile: {profile_name}")
+    if len(X) == 0:
+        return np.array([], dtype=float), np.ones(4) / 4
+
+    X = np.nan_to_num(X, nan=50.0, posinf=100.0, neginf=0.0)
+    X = np.clip(X, 0.0, 100.0)
+    if entropy_weights is None:
+        entropy_weights = compute_entropy_weights(X)
+    prior = PRODUCT_PROFILE_PRIORS[profile_name]['prior']
+    weights = regularize_entropy_weights(entropy_weights, prior)
+    scores = compute_topsis_ranking(
+        X,
+        weights=weights,
+        benefit_criteria=list(range(X.shape[1]))
+    )
+    return 100.0 * scores, weights
+
+
+def compute_product_recommendation(
+    area_quality_score: Union[np.ndarray, pd.Series],
+    access_score: Union[np.ndarray, pd.Series],
+    profile_name: str = 'balanced'
+) -> np.ndarray:
+    """Blend static area quality with request-specific accessibility."""
+    if profile_name not in PRODUCT_PROFILE_PRIORS:
+        raise ValueError(f"Unknown profile: {profile_name}")
+    access_weight = PRODUCT_PROFILE_PRIORS[profile_name]['access_weight']
+    area = np.clip(_as_finite_array(area_quality_score), 0, 100)
+    access = np.clip(_as_finite_array(access_score), 0, 100)
+    return (1.0 - access_weight) * area + access_weight * access
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +619,13 @@ def compute_entropy_weights(
         Weights for each criterion, summing to 1.0
     """
     X = np.asarray(indicators, dtype=float)
+    if X.ndim != 2:
+        raise ValueError("indicators must be a two-dimensional matrix")
+    if X.shape[1] == 0:
+        return np.array([], dtype=float)
+    if X.shape[0] <= 1:
+        return np.ones(X.shape[1], dtype=float) / X.shape[1]
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
     if X.min() < 0:
         raise ValueError("Entropy weights require non-negative indicators")
@@ -444,6 +641,8 @@ def compute_entropy_weights(
 
     # Redundancy = 1 - E
     D = 1 - E
+    if not np.isfinite(D).all() or D.sum() <= epsilon:
+        return np.ones(X.shape[1], dtype=float) / X.shape[1]
     weights = D / D.sum()
 
     return weights
@@ -473,7 +672,12 @@ def compute_topsis_ranking(
         TOPSIS scores in [0, 1], higher = better
     """
     X = np.asarray(indicators, dtype=float)
+    if X.ndim != 2:
+        raise ValueError("indicators must be a two-dimensional matrix")
     n, m = X.shape
+    if n == 0:
+        return np.array([], dtype=float)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
     if weights is None:
         weights = np.ones(m) / m
@@ -507,5 +711,11 @@ def compute_topsis_ranking(
     D_anti = np.linalg.norm(V - V_anti, axis=1)
 
     # Step 5: Score
-    score = D_anti / (D_ideal + D_anti + 1e-12)
+    denominator = D_ideal + D_anti
+    score = np.divide(
+        D_anti,
+        denominator,
+        out=np.full_like(D_anti, 0.5),
+        where=denominator > 1e-12,
+    )
     return score

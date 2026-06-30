@@ -40,6 +40,8 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from utils.config_loader import load_config, get_config_value
 from src.analysis.scoring import (
     normalize_zscore_to_100,
+    normalize_robust_percentile,
+    compute_bayesian_rating,
     compute_composite_score,
     compute_tiebreaker_rank,
     PREFERENCE_PROFILES,
@@ -48,7 +50,9 @@ from src.analysis.scoring import (
     compute_baseline_score,
     compute_entropy_weights,
     compute_topsis_ranking,
+    compute_product_area_scores,
 )
+from src.analysis.airports import tag_airport_hotspots
 
 # Setup logging
 logging.basicConfig(
@@ -210,7 +214,7 @@ def compute_spatial_intersections(
     logger.info("Computing spatial intersections...")
 
     # Project to meters for accurate area calculations
-    crs_projected = "EPSG:2263"  # NAD83 / NY Long Island
+    crs_projected = "EPSG:32618"  # WGS 84 / UTM zone 18N, metres
     gdf_d_proj = gdf_dining.to_crs(crs_projected)
     gdf_t_proj = gdf_taxi.to_crs(crs_projected)
 
@@ -249,6 +253,10 @@ def compute_spatial_intersections(
                     'n_taxi_dropoffs': taxi_zone.get('n_dropoffs', 0),
                     'taxi_weight': taxi_zone.get('total_weight', 0),
                     'avg_rating': dining_zone.get('avg_rating', None),
+                    'bayesian_rating': dining_zone.get('bayesian_rating', None),
+                    'n_rated_restaurants': dining_zone.get('n_rated_restaurants', 0),
+                    'rating_coverage': dining_zone.get('rating_coverage', None),
+                    'total_review_count': dining_zone.get('total_review_count', 0),
                     'dining_area_sqm': dining_area,
                     'taxi_area_sqm': taxi_area,
                     'intersection_area_sqm': intersection_area,
@@ -411,6 +419,108 @@ def calculate_composite_scores_v2(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoData
     return gdf_hotspots
 
 
+def calculate_product_scores_v3(
+    gdf_hotspots: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
+    """Add stable, explainable product components and a balanced area score."""
+    logger.info("Calculating product scoring components (v3)...")
+    if len(gdf_hotspots) == 0:
+        return gdf_hotspots
+
+    area_km2 = (
+        gdf_hotspots['intersection_area_sqm'] / 1_000_000
+    ).replace(0, np.nan).fillna(1e-6)
+    restaurant_density = gdf_hotspots['n_restaurants'] / area_km2
+    taxi_density = gdf_hotspots['taxi_weight'] / area_km2
+
+    demand = normalize_robust_percentile(taxi_density, log_transform=True)
+    restaurant_density_score = normalize_robust_percentile(
+        restaurant_density,
+        log_transform=True
+    )
+
+    avg_rating = pd.to_numeric(
+        gdf_hotspots.get('avg_rating', pd.Series(np.nan, index=gdf_hotspots.index)),
+        errors='coerce'
+    )
+    review_count = pd.to_numeric(
+        gdf_hotspots.get(
+            'total_review_count',
+            pd.Series(0.0, index=gdf_hotspots.index)
+        ),
+        errors='coerce'
+    ).fillna(0.0)
+    bayesian = pd.to_numeric(
+        gdf_hotspots.get(
+            'bayesian_rating',
+            pd.Series(np.nan, index=gdf_hotspots.index)
+        ),
+        errors='coerce'
+    )
+    missing_bayesian = bayesian.isna()
+    if missing_bayesian.any():
+        bayesian.loc[missing_bayesian] = compute_bayesian_rating(
+            avg_rating.loc[missing_bayesian].to_numpy(),
+            review_count.loc[missing_bayesian].to_numpy(),
+            global_mean=float(avg_rating.mean()) if avg_rating.notna().any() else 3.5
+        )
+    rating_score = np.clip((bayesian.to_numpy() - 1.0) / 4.0 * 100.0, 0, 100)
+
+    rating_coverage = pd.to_numeric(
+        gdf_hotspots.get(
+            'rating_coverage',
+            pd.Series(np.where(avg_rating.notna(), 1.0, 0.0), index=gdf_hotspots.index)
+        ),
+        errors='coerce'
+    ).fillna(0.0).clip(0, 1).to_numpy() * 100.0
+
+    poi = (
+        0.50 * restaurant_density_score
+        + 0.35 * rating_score
+        + 0.15 * rating_coverage
+    )
+    time_fit = np.clip(
+        pd.to_numeric(
+            gdf_hotspots.get(
+                'peak_time_score',
+                pd.Series(50.0, index=gdf_hotspots.index)
+            ),
+            errors='coerce'
+        ).fillna(50.0).to_numpy(),
+        0,
+        100
+    )
+    support = normalize_robust_percentile(
+        gdf_hotspots['n_taxi_dropoffs'],
+        log_transform=True
+    )
+    coordinate_precision = np.full(len(gdf_hotspots), 100.0)
+    confidence = 0.70 * support + 0.30 * coordinate_precision
+
+    components = np.column_stack([demand, poi, time_fit, confidence])
+    area_score, weights = compute_product_area_scores(
+        components,
+        profile_name='balanced'
+    )
+
+    gdf_hotspots['demand_score_v3'] = demand
+    gdf_hotspots['poi_score_v3'] = poi
+    gdf_hotspots['time_fit_score_v3'] = time_fit
+    gdf_hotspots['data_confidence_v3'] = confidence
+    gdf_hotspots['bayesian_rating'] = bayesian.to_numpy()
+    gdf_hotspots['area_quality_score_v3'] = area_score
+    for idx, component in enumerate(('demand', 'poi', 'time', 'confidence')):
+        gdf_hotspots[f'product_weight_{component}'] = float(weights[idx])
+
+    gdf_hotspots = gdf_hotspots.sort_values(
+        ['area_quality_score_v3', 'data_confidence_v3'],
+        ascending=[False, False],
+        kind='mergesort'
+    ).reset_index(drop=True)
+    gdf_hotspots['rank_v3'] = np.arange(1, len(gdf_hotspots) + 1)
+    return gdf_hotspots
+
+
 def add_peak_time_features(gdf_hotspots: gpd.GeoDataFrame, gdf_taxi: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Add peak-hour time-decay features to hotspots using 2014 taxi dropoff data.
@@ -466,25 +576,41 @@ def add_peak_time_features(gdf_hotspots: gpd.GeoDataFrame, gdf_taxi: gpd.GeoData
     # Peak hours: 17-23 (dinner/evening peak)
     PEAK_HOURS = list(range(17, 24))
     gdf_joined['is_peak'] = gdf_joined['hour'].isin(PEAK_HOURS)
+    gdf_joined['is_lunch'] = gdf_joined['hour'].isin([11, 12, 13])
 
     # Aggregate total weight per hotspot
     agg_total = gdf_joined.groupby('taxi_hotspot_id')['weight'].sum().reset_index(name='total_weight')
     # Aggregate peak weight per hotspot
     agg_peak = gdf_joined[gdf_joined['is_peak']].groupby('taxi_hotspot_id')['weight'].sum().reset_index(name='peak_weight')
+    agg_lunch = gdf_joined[gdf_joined['is_lunch']].groupby(
+        'taxi_hotspot_id'
+    )['weight'].sum().reset_index(name='lunch_weight')
     # Merge and compute ratio
     agg = agg_total.merge(agg_peak, on='taxi_hotspot_id', how='left')
+    agg = agg.merge(agg_lunch, on='taxi_hotspot_id', how='left')
     agg['peak_weight'] = agg['peak_weight'].fillna(0)
+    agg['lunch_weight'] = agg['lunch_weight'].fillna(0)
     agg['peak_hour_ratio'] = agg['peak_weight'] / agg['total_weight'].replace(0, np.nan)
+    agg['lunch_peak_ratio'] = agg['lunch_weight'] / agg['total_weight'].replace(0, np.nan)
     agg['peak_hour_ratio'] = agg['peak_hour_ratio'].fillna(0.0)
+    agg['lunch_peak_ratio'] = agg['lunch_peak_ratio'].fillna(0.0)
 
     # Merge to gdf_hotspots
     gdf_hotspots = gdf_hotspots.merge(
-        agg[['taxi_hotspot_id', 'peak_hour_ratio', 'peak_weight']],
+        agg[[
+            'taxi_hotspot_id',
+            'peak_hour_ratio',
+            'peak_weight',
+            'lunch_peak_ratio',
+            'lunch_weight',
+        ]],
         on='taxi_hotspot_id',
         how='left'
     )
     gdf_hotspots['peak_hour_ratio'] = gdf_hotspots['peak_hour_ratio'].fillna(0.0)
     gdf_hotspots['peak_weight'] = gdf_hotspots['peak_weight'].fillna(0.0)
+    gdf_hotspots['lunch_peak_ratio'] = gdf_hotspots['lunch_peak_ratio'].fillna(0.0)
+    gdf_hotspots['lunch_weight'] = gdf_hotspots['lunch_weight'].fillna(0.0)
 
     # Normalize peak_hour_ratio to [0, 100] using z-score + winsorization
     if gdf_hotspots['peak_hour_ratio'].max() > 0:
@@ -495,6 +621,14 @@ def add_peak_time_features(gdf_hotspots: gpd.GeoDataFrame, gdf_taxi: gpd.GeoData
         )
     else:
         gdf_hotspots['peak_time_score'] = 50.0
+    if gdf_hotspots['lunch_peak_ratio'].max() > 0:
+        gdf_hotspots['lunch_peak_score'] = normalize_zscore_to_100(
+            gdf_hotspots['lunch_peak_ratio'].values,
+            winsorize=True,
+            winsorize_pct=(0.01, 0.99)
+        )
+    else:
+        gdf_hotspots['lunch_peak_score'] = 50.0
 
     logger.info(f"  Peak hour ratio: [{gdf_hotspots['peak_hour_ratio'].min():.3f}, {gdf_hotspots['peak_hour_ratio'].max():.3f}]")
     logger.info(f"  Peak time score: [{gdf_hotspots['peak_time_score'].min():.1f}, {gdf_hotspots['peak_time_score'].max():.1f}]")
@@ -530,10 +664,10 @@ def add_accessibility_proxy(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     # Times Square as Manhattan reference point
     midtown = Point(-73.9855, 40.7580)
     midtown_gdf = gpd.GeoDataFrame([{'geometry': midtown}], crs="EPSG:4326")
-    midtown_proj = midtown_gdf.to_crs("EPSG:2263").geometry.iloc[0]
+    midtown_proj = midtown_gdf.to_crs("EPSG:32618").geometry.iloc[0]
 
     # Project hotspots and get centroids
-    gdf_proj = gdf_hotspots.to_crs("EPSG:2263")
+    gdf_proj = gdf_hotspots.to_crs("EPSG:32618")
     centroids = gdf_proj.geometry.centroid
 
     # Distance in km
@@ -541,6 +675,7 @@ def add_accessibility_proxy(gdf_hotspots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     # Compute accessibility score using exponential decay on distance (no hard threshold)
     # 0.05 per km: 10 km → 60.7, 20 km → 36.8, 50 km → 8.2, 70 km → 3.0
+    gdf_hotspots['distance_to_midtown_km'] = distances_km.values
     gdf_hotspots['accessibility_proxy'] = 100.0 * np.exp(-0.05 * distances_km.values)
 
     logger.info(f"  Distance to Midtown: [{distances_km.min():.1f}, {distances_km.max():.1f}] km")
@@ -649,8 +784,8 @@ def save_outputs(
         'input_data': {
             'n_dining_zones': int(len(gdf_dining)),
             'n_taxi_hotspots': int(len(gdf_taxi)),
-            'dining_total_area_sqkm': float(gdf_dining.to_crs("EPSG:2263").area.sum() / 1_000_000),
-            'taxi_total_area_sqkm': float(gdf_taxi.to_crs("EPSG:2263").area.sum() / 1_000_000)
+            'dining_total_area_sqkm': float(gdf_dining.to_crs("EPSG:32618").area.sum() / 1_000_000),
+            'taxi_total_area_sqkm': float(gdf_taxi.to_crs("EPSG:32618").area.sum() / 1_000_000)
         },
         'final_hotspots': {
             'n_hotspots': int(len(gdf_hotspots)),
@@ -667,7 +802,7 @@ def save_outputs(
         top_10 = gdf_hotspots.nlargest(10, 'popularity_score')
         for idx, row in top_10.iterrows():
             centroid = row.geometry.centroid
-            centroid_wgs84 = gpd.GeoSeries([centroid], crs="EPSG:2263").to_crs("EPSG:4326").iloc[0]
+            centroid_wgs84 = gpd.GeoSeries([centroid], crs="EPSG:32618").to_crs("EPSG:4326").iloc[0]
 
             analysis['top_hotspots'].append({
                 'rank': int(row['rank']),
@@ -754,7 +889,7 @@ def save_v2_outputs(
         top_10_v2 = gdf_hotspots.nsmallest(10, 'rank_v2')
         for idx, row in top_10_v2.iterrows():
             centroid = row.geometry.centroid
-            centroid_wgs84 = gpd.GeoSeries([centroid], crs="EPSG:2263").to_crs("EPSG:4326").iloc[0]
+            centroid_wgs84 = gpd.GeoSeries([centroid], crs="EPSG:32618").to_crs("EPSG:4326").iloc[0]
 
             analysis_v2['top_hotspots_v2'].append({
                 'rank_v2': int(row['rank_v2']),
@@ -777,6 +912,65 @@ def save_v2_outputs(
     with open(analysis_v2_path, 'w') as f:
         json.dump(analysis_v2, f, indent=2)
     logger.info(f"Saved v2 analysis: {analysis_v2_path}")
+
+
+def save_v3_outputs(
+    gdf_hotspots: gpd.GeoDataFrame,
+    output_dir: str
+):
+    """Save rankable v3 hotspots and keep airport hotspots as diagnostics."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    wgs84 = gdf_hotspots.to_crs("EPSG:4326")
+    airport_mask = wgs84['is_airport'].fillna(False)
+    rankable = wgs84[~airport_mask].copy()
+    airport = wgs84[airport_mask].copy()
+    rankable = rankable.sort_values(
+        "area_quality_score_v3",
+        ascending=False,
+        kind="mergesort",
+    )
+    rankable["rank_v3"] = np.arange(1, len(rankable) + 1)
+
+    rankable.to_file(output_path / "final_hotspots_v3.geojson", driver="GeoJSON")
+    if len(airport):
+        airport.to_file(
+            output_path / "airport_hotspots_diagnostics.geojson",
+            driver="GeoJSON"
+        )
+
+    weights = {}
+    if len(gdf_hotspots):
+        for component in ('demand', 'poi', 'time', 'confidence'):
+            weights[component] = float(
+                gdf_hotspots[f'product_weight_{component}'].iloc[0]
+            )
+    analysis = {
+        'scoring_version': 'v3_product',
+        'method': 'regularized entropy TOPSIS on demand, POI, time, and confidence',
+        'rankable_hotspots': int(len(rankable)),
+        'excluded_airport_hotspots': int(len(airport)),
+        'balanced_product_weights': weights,
+        'top_hotspots_v3': [
+            {
+                'rank_v3': int(row['rank_v3']),
+                'area_quality_score_v3': float(row['area_quality_score_v3']),
+                'demand_score_v3': float(row['demand_score_v3']),
+                'poi_score_v3': float(row['poi_score_v3']),
+                'time_fit_score_v3': float(row['time_fit_score_v3']),
+                'data_confidence_v3': float(row['data_confidence_v3']),
+                'n_restaurants': int(row['n_restaurants']),
+                'n_taxi_dropoffs': int(row['n_taxi_dropoffs']),
+            }
+            for _, row in rankable.nsmallest(10, 'rank_v3').iterrows()
+        ],
+    }
+    with open(
+        output_path / "intersection_analysis_v3.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(analysis, f, indent=2)
 
 
 def main():
@@ -819,6 +1013,7 @@ def main():
         min_area_sqm=min_area_sqm,
         min_overlap_ratio=min_overlap_ratio
     )
+    gdf_hotspots = tag_airport_hotspots(gdf_hotspots)
 
     # Step 3b: Add peak-time and accessibility features
     logger.info("\n[Step 3b/5] Adding peak-time and accessibility features...")
@@ -832,6 +1027,9 @@ def main():
     logger.info("\n[Step 4b/5] Calculating composite scores (v2 robust)...")
     gdf_hotspots = calculate_composite_scores_v2(gdf_hotspots)
 
+    logger.info("\n[Step 4c/5] Calculating product scores (v3)...")
+    gdf_hotspots = calculate_product_scores_v3(gdf_hotspots)
+
     # Step 5: Save outputs (v1 as default, v2 as comparison)
     logger.info("\n[Step 5/5] Saving outputs...")
     save_outputs(gdf_hotspots, gdf_dining, gdf_taxi, output_dir)
@@ -839,6 +1037,9 @@ def main():
     # Step 5b: Save v2 analysis separately for comparison
     logger.info("\n[Step 5b/5] Saving v2 comparison outputs...")
     save_v2_outputs(gdf_hotspots, gdf_dining, gdf_taxi, output_dir)
+
+    logger.info("\n[Step 5c/5] Saving v3 product outputs...")
+    save_v3_outputs(gdf_hotspots, output_dir)
 
     logger.info("\n✅ Spatial intersection completed successfully!")
 

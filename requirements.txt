@@ -33,6 +33,8 @@ seaborn>=0.12.0
 plotly>=5.14.0
 folium>=0.14.0
 contextily>=1.3.0  # Basemaps
+streamlit>=1.40.0
+streamlit-folium>=0.24.0
 
 # Data Processing Utilities
 pyarrow>=12.0.0  # For Parquet files
@@ -52,6 +54,8 @@ flask>=2.3.0  # Web demo application
 # Testing
 pytest>=7.4.0
 pytest-cov>=4.1.0
+libpysal>=4.12.0
+esda>=2.6.0
 
 # Documentation
 jupyter>=1.0.0

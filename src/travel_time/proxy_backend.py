@@ -122,4 +122,6 @@ class ProxyTravelTime:
             'mode': self.mode,
             'coefficient': self.coeff,
             'description': 'Line-of-sight distance with mode-specific decay',
+            'fallback_used': False,
+            'fallback_reason': None,
         }

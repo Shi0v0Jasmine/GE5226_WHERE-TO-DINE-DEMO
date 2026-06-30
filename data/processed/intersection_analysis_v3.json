@@ -1,0 +1,114 @@
+{
+  "scoring_version": "v3_product",
+  "method": "regularized entropy TOPSIS on demand, POI, time, and confidence",
+  "rankable_hotspots": 55,
+  "excluded_airport_hotspots": 7,
+  "balanced_product_weights": {
+    "demand": 0.4287577639681492,
+    "poi": 0.22963833177845744,
+    "time": 0.19965786771492983,
+    "confidence": 0.14194603653846352
+  },
+  "top_hotspots_v3": [
+    {
+      "rank_v3": 1,
+      "area_quality_score_v3": 83.4620149992039,
+      "demand_score_v3": 98.38709677419355,
+      "poi_score_v3": 49.698049345458486,
+      "time_fit_score_v3": 63.78728591306595,
+      "data_confidence_v3": 99.43548387096773,
+      "n_restaurants": 753,
+      "n_taxi_dropoffs": 246900
+    },
+    {
+      "rank_v3": 2,
+      "area_quality_score_v3": 81.0454978164688,
+      "demand_score_v3": 85.48387096774194,
+      "poi_score_v3": 52.92385579707138,
+      "time_fit_score_v3": 79.00847304511187,
+      "data_confidence_v3": 92.66129032258064,
+      "n_restaurants": 117,
+      "n_taxi_dropoffs": 2044
+    },
+    {
+      "rank_v3": 3,
+      "area_quality_score_v3": 79.5872266690035,
+      "demand_score_v3": 100.0,
+      "poi_score_v3": 36.79482353900687,
+      "time_fit_score_v3": 63.78728591306595,
+      "data_confidence_v3": 99.43548387096773,
+      "n_restaurants": 363,
+      "n_taxi_dropoffs": 246900
+    },
+    {
+      "rank_v3": 4,
+      "area_quality_score_v3": 79.34961642644389,
+      "demand_score_v3": 88.70967741935483,
+      "poi_score_v3": 38.40772676481332,
+      "time_fit_score_v3": 96.9306978659809,
+      "data_confidence_v3": 95.48387096774194,
+      "n_restaurants": 94,
+      "n_taxi_dropoffs": 3442
+    },
+    {
+      "rank_v3": 5,
+      "area_quality_score_v3": 78.08989989819453,
+      "demand_score_v3": 91.93548387096774,
+      "poi_score_v3": 31.14966224868429,
+      "time_fit_score_v3": 96.9306978659809,
+      "data_confidence_v3": 95.48387096774194,
+      "n_restaurants": 49,
+      "n_taxi_dropoffs": 3442
+    },
+    {
+      "rank_v3": 6,
+      "area_quality_score_v3": 77.63935503137722,
+      "demand_score_v3": 77.41935483870968,
+      "poi_score_v3": 71.47224289384557,
+      "time_fit_score_v3": 75.21819345123362,
+      "data_confidence_v3": 85.88709677419354,
+      "n_restaurants": 195,
+      "n_taxi_dropoffs": 535
+    },
+    {
+      "rank_v3": 7,
+      "area_quality_score_v3": 77.5187941576282,
+      "demand_score_v3": 80.64516129032258,
+      "poi_score_v3": 56.149662248684294,
+      "time_fit_score_v3": 73.83663416506559,
+      "data_confidence_v3": 81.93548387096774,
+      "n_restaurants": 39,
+      "n_taxi_dropoffs": 391
+    },
+    {
+      "rank_v3": 8,
+      "area_quality_score_v3": 76.68552915101708,
+      "demand_score_v3": 82.25806451612904,
+      "poi_score_v3": 44.85933966803913,
+      "time_fit_score_v3": 79.00847304511187,
+      "data_confidence_v3": 92.66129032258064,
+      "n_restaurants": 95,
+      "n_taxi_dropoffs": 2044
+    },
+    {
+      "rank_v3": 9,
+      "area_quality_score_v3": 76.55354090185247,
+      "demand_score_v3": 75.80645161290323,
+      "poi_score_v3": 61.79482353900687,
+      "time_fit_score_v3": 97.8696436878598,
+      "data_confidence_v3": 80.80645161290323,
+      "n_restaurants": 55,
+      "n_taxi_dropoffs": 329
+    },
+    {
+      "rank_v3": 10,
+      "area_quality_score_v3": 74.44181608082094,
+      "demand_score_v3": 79.03225806451613,
+      "poi_score_v3": 40.020629990619774,
+      "time_fit_score_v3": 96.9306978659809,
+      "data_confidence_v3": 95.48387096774194,
+      "n_restaurants": 172,
+      "n_taxi_dropoffs": 3442
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "status": "legacy_baseline_only",
+  "formal_seven_day_experiment": false,
+  "source_file": "data/raw/taxi_2014/yellow_tripdata_2014-01-06.parquet",
+  "source_rows": 394972,
+  "source_sha256": "02b65ab4b6932585c9051d7746e0a6595ffaf38f2571f26a8448100fc5803001",
+  "source_date_min": "2014-01-06 00:00:00",
+  "source_date_max": "2014-01-06 23:59:58",
+  "processed_rows": 282165,
+  "active_days": 1,
+  "note": "Use for pipeline and UI validation only. Do not mix with the controlled Monday-Sunday result."
+}

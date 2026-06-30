@@ -19,6 +19,6 @@ Backends:
 See travel_time_calculator.py for full documentation.
 """
 
-from .travel_time_calculator import TravelTimeCalculator
+from .travel_time_calculator import TravelTimeCalculator, BackendUnavailableError
 
-__all__ = ['TravelTimeCalculator']
+__all__ = ['TravelTimeCalculator', 'BackendUnavailableError']

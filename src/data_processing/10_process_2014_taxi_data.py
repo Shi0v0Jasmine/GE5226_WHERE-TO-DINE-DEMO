@@ -94,6 +94,21 @@ def load_2014_taxi_data(data_dir: str) -> pd.DataFrame:
         dfs.append(df)
 
     df_combined = pd.concat(dfs, ignore_index=True)
+    identity_columns = [
+        column for column in [
+            'pickup_datetime',
+            'dropoff_datetime',
+            'pickup_longitude',
+            'pickup_latitude',
+            'dropoff_longitude',
+            'dropoff_latitude',
+        ]
+        if column in df_combined.columns
+    ]
+    df_combined['trip_id'] = pd.util.hash_pandas_object(
+        df_combined[identity_columns],
+        index=False
+    ).astype(str)
     logger.info(f"Loaded {len(df_combined):,} total 2014 taxi trips")
 
     return df_combined
@@ -162,7 +177,7 @@ def save_2014_outputs(df: pd.DataFrame, output_dir: str, sample_size: int = 1000
     output_path.mkdir(parents=True, exist_ok=True)
 
     columns_to_save = [
-        'dropoff_datetime', 'dropoff_lon', 'dropoff_lat',
+        'trip_id', 'dropoff_datetime', 'dropoff_lon', 'dropoff_lat',
         'hour', 'day_of_week', 'is_weekend', 'weight'
     ]
 
@@ -208,6 +223,8 @@ def save_2014_outputs(df: pd.DataFrame, output_dir: str, sample_size: int = 1000
             'dinner': int(((df['hour'] >= 17) & (df['hour'] < 22)).sum()),
             'late_night': int(((df['hour'] >= 22) | (df['hour'] < 1)).sum())
         },
+        'active_days': int(df['dropoff_datetime'].dt.date.nunique()),
+        'unique_trip_ids': int(df['trip_id'].nunique()),
         'note': '2014 coordinate-level data (no zone-centroid conversion)'
     }
 

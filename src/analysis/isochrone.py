@@ -170,11 +170,11 @@ def calculate_isochrone(
             [{'geometry': origin_point}],
             crs="EPSG:4326"
         )
-        gdf_proj = gdf_origin.to_crs("EPSG:2263")
+        gdf_proj = gdf_origin.to_crs("EPSG:32618")
         polygon_proj = gdf_proj.geometry.iloc[0].buffer(buffer_meters)
         gdf_result = gpd.GeoDataFrame(
             [{'geometry': polygon_proj}],
-            crs="EPSG:2263"
+            crs="EPSG:32618"
         )
         polygon_wgs84 = gdf_result.to_crs("EPSG:4326").geometry.iloc[0]
     else:

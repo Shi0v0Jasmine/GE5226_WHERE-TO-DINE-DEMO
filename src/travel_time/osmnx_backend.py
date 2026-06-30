@@ -43,11 +43,14 @@ class OSMnxTravelTime:
         Path to OSMnx graphml file. If not found, falls back to proxy.
     """
 
-    def __init__(self, mode='walk', graph_path=None, **kwargs):
+    def __init__(self, mode='walk', graph_path=None, allow_fallback=True, **kwargs):
         self.mode = mode
         self.graph_path = graph_path or f"data/networks/nyc_{mode}.graphml"
+        self.allow_fallback = allow_fallback
         self._G = None
         self._fallback = None
+        self.fallback_used = False
+        self.fallback_reason = None
 
     def _load_graph(self):
         """Lazy-load the OSMnx graph."""
@@ -105,7 +108,11 @@ class OSMnxTravelTime:
         G = self._load_graph()
 
         if G is None:
-            logger.warning("OSMnx graph unavailable, using proxy fallback")
+            self.fallback_used = True
+            self.fallback_reason = f"OSMnx graph unavailable: {self.graph_path}"
+            if not self.allow_fallback:
+                raise RuntimeError(self.fallback_reason)
+            logger.warning("%s; using proxy fallback", self.fallback_reason)
             return self._get_fallback().matrix(origins, destinations)
 
         try:
@@ -134,14 +141,24 @@ class OSMnxTravelTime:
 
             # Replace any remaining inf with proxy fallback
             if np.isinf(mat).any():
-                logger.warning(f"{np.isinf(mat).sum()} OD pairs unreachable in OSMnx graph, using proxy")
+                self.fallback_used = True
+                self.fallback_reason = (
+                    f"{np.isinf(mat).sum()} OD pairs were unreachable in the OSMnx graph"
+                )
+                if not self.allow_fallback:
+                    raise RuntimeError(self.fallback_reason)
+                logger.warning("%s; using proxy", self.fallback_reason)
                 proxy_mat = self._get_fallback().matrix(origins, destinations)
                 mat = np.where(np.isinf(mat), proxy_mat, mat)
 
             return mat
 
         except Exception as e:
-            logger.warning(f"OSMnx computation failed: {e}, using proxy fallback")
+            if not self.allow_fallback:
+                raise
+            self.fallback_used = True
+            self.fallback_reason = f"OSMnx computation failed: {e}"
+            logger.warning("%s; using proxy fallback", self.fallback_reason)
             return self._get_fallback().matrix(origins, destinations)
 
     def single(self, origin: Tuple[float, float], destination: Tuple[float, float]) -> float:
@@ -152,7 +169,7 @@ class OSMnxTravelTime:
         """Check if OSMnx graph is available."""
         try:
             import osmnx
-            return Path(self.graph_path).exists()
+            return self.mode in {'walk', 'bike', 'drive'} and Path(self.graph_path).exists()
         except ImportError:
             return False
 
@@ -164,4 +181,10 @@ class OSMnxTravelTime:
             'graph_exists': Path(self.graph_path).exists() if self.graph_path else False,
             'description': 'Real street network via OpenStreetMap + OSMnx',
             'note': 'Requires: pip install osmnx networkx; download graph first',
+            'fallback_used': self.fallback_used,
+            'fallback_reason': self.fallback_reason,
+            'unavailable_reason': (
+                None if self.is_available()
+                else f"OSMnx graph or dependency unavailable for mode={self.mode}"
+            ),
         }

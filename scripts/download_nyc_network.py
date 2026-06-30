@@ -63,17 +63,17 @@ def download_network(network_type: str, output_path: Path):
     
     logger.info(f"  Nodes: {G.number_of_nodes()}, Edges: {G.number_of_edges()}")
     
-    # Add travel time attribute based on speed
-    speed_kmh = {
-        'walk': 5.0,
-        'bike': 15.0,
-        'drive': 30.0,  # NYC average
-    }.get(network_type, 5.0)
-    speed_mps = speed_kmh * 1000 / 3600
-    
-    for u, v, k, data in G.edges(keys=True, data=True):
-        length_m = data.get('length', 0)
-        data['travel_time'] = length_m / speed_mps
+    # Drive uses OSM maxspeed/highway defaults. Walk/bike use documented constants.
+    if network_type == 'drive':
+        G = ox.routing.add_edge_speeds(G)
+        G = ox.routing.add_edge_travel_times(G)
+    else:
+        speed_kmh = {'walk': 5.0, 'bike': 15.0}[network_type]
+        speed_mps = speed_kmh * 1000 / 3600
+        for _, _, _, data in G.edges(keys=True, data=True):
+            length_m = float(data.get('length', 0))
+            data['speed_kph'] = speed_kmh
+            data['travel_time'] = length_m / speed_mps
     
     # Save
     output_path.parent.mkdir(parents=True, exist_ok=True)

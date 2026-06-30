@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/
@@ -38,3 +39,17 @@ Thumbs.db
 # The current demo repository tracks selected data files, including Git LFS
 # parquet/pbf assets. Do not ignore data/ wholesale unless the project moves
 # to a manifest/download-script workflow.
+data/raw/taxi_2014/
+data/raw/citibike_2014/
+data/networks/
+data/interim/taxi_2014_*.json
+data/interim/taxi_dropoffs_2014_*.parquet
+data/interim/taxi_dropoffs_2014_*.geojson
+data/interim/controlled_2014/
+data/processed/taxi_dropoffs_2014_*.parquet
+
+# Reproducibility metadata and compact fixtures remain versioned.
+!data/manifests/
+!data/manifests/**
+!data/fixtures/
+!data/fixtures/**

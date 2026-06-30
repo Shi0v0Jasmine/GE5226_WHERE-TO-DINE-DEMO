@@ -144,7 +144,7 @@ def prepare_weighted_coordinates(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarr
     # Convert to projected CRS for accurate distances
     geometry = [Point(lon, lat) for lon, lat in zip(df['dropoff_lon'], df['dropoff_lat'])]
     gdf = gpd.GeoDataFrame(df, geometry=geometry, crs="EPSG:4326")
-    gdf_proj = gdf.to_crs("EPSG:2263")  # NAD83 / NY Long Island
+    gdf_proj = gdf.to_crs("EPSG:32618")
 
     # Extract projected coordinates
     coords_proj = np.array([[point.x, point.y] for point in gdf_proj.geometry])
@@ -309,7 +309,7 @@ def create_hotspot_polygons(
     gdf['cluster'] = labels
 
     # Project to meters
-    gdf_proj = gdf.to_crs("EPSG:2263")
+    gdf_proj = gdf.to_crs("EPSG:32618")
 
     hotspots = []
 
@@ -343,7 +343,7 @@ def create_hotspot_polygons(
         })
 
     # Create GeoDataFrame
-    gdf_hotspots = gpd.GeoDataFrame(hotspots, crs="EPSG:2263")
+    gdf_hotspots = gpd.GeoDataFrame(hotspots, crs="EPSG:32618")
 
     logger.info(f"Created {len(gdf_hotspots)} hotspot polygons")
     logger.info(f"Total area: {gdf_hotspots['area_sqkm'].sum():.2f} km²")

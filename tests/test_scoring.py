@@ -30,6 +30,12 @@ from src.analysis.scoring import (
     compute_topsis_ranking,
     get_profile_weights,
     PREFERENCE_PROFILES,
+    normalize_robust_percentile,
+    compute_bayesian_rating,
+    compute_access_score_half_life,
+    regularize_entropy_weights,
+    compute_product_area_scores,
+    compute_product_recommendation,
 )
 
 
@@ -70,12 +76,34 @@ class TestNormalization:
         assert result.min() >= 0
         assert result.max() <= 100
 
+    def test_robust_percentile_handles_nan_and_outliers(self):
+        result = normalize_robust_percentile([1, 2, np.nan, 3, 1_000_000])
+        assert np.isfinite(result).all()
+        assert result.min() >= 0
+        assert result.max() <= 100
+
+    def test_bayesian_rating_shrinks_low_review_items(self):
+        result = compute_bayesian_rating(
+            ratings=[5.0, 5.0],
+            review_counts=[1, 1_000],
+            global_mean=3.5,
+            prior_reviews=20,
+        )
+        assert result[0] < result[1]
+
 
 # ---------------------------------------------------------------------------
 # Accessibility tests
 # ---------------------------------------------------------------------------
 
 class TestAccessibility:
+    def test_half_life_decay(self):
+        result = compute_access_score_half_life(
+            [0, 10, 31],
+            max_time_min=30,
+            half_life_min=10,
+        )
+        np.testing.assert_allclose(result, [100, 50, 0])
     def test_decay_zero_time(self):
         score = compute_access_score_decay(0, max_time_min=15, decay_type='exponential')
         assert score == 100.0
@@ -225,6 +253,59 @@ class TestPreferenceProfiles:
 # ---------------------------------------------------------------------------
 
 class TestEntropyTOPSIS:
+    def test_entropy_single_row_is_equal(self):
+        weights = compute_entropy_weights(np.array([[1.0, 5.0, 9.0]]))
+        np.testing.assert_allclose(weights, [1 / 3, 1 / 3, 1 / 3])
+
+    def test_regularized_weights_respect_bounds(self):
+        weights = regularize_entropy_weights(
+            entropy_weights=np.array([0.97, 0.01, 0.01, 0.01]),
+            prior_weights=np.array([0.4, 0.3, 0.2, 0.1]),
+        )
+        assert weights.sum() == pytest.approx(1.0)
+        assert weights.min() >= 0.10 - 1e-9
+        assert weights.max() <= 0.45 + 1e-9
+
+
+class TestProductScoring:
+    @pytest.mark.parametrize("profile", [
+        "balanced",
+        "quality_seeker",
+        "convenience",
+        "local_gem",
+        "late_night",
+    ])
+    def test_all_product_profiles_return_bounded_scores(self, profile):
+        result = compute_product_recommendation(
+            np.array([20.0, 80.0]),
+            np.array([90.0, 10.0]),
+            profile_name=profile,
+        )
+        assert np.isfinite(result).all()
+        assert result.min() >= 0
+        assert result.max() <= 100
+
+    def test_constant_components_produce_neutral_score(self):
+        scores, weights = compute_product_area_scores(
+            np.ones((3, 4))
+        )
+        np.testing.assert_allclose(scores, [50, 50, 50])
+        assert weights.sum() == pytest.approx(1.0)
+
+    def test_convenience_penalizes_low_access_more(self):
+        area_quality = np.array([80.0])
+        accessibility = np.array([10.0])
+        balanced = compute_product_recommendation(
+            area_quality,
+            accessibility,
+            profile_name="balanced",
+        )
+        convenience = compute_product_recommendation(
+            area_quality,
+            accessibility,
+            profile_name="convenience",
+        )
+        assert convenience[0] < balanced[0]
     def test_entropy_weights_equal_data(self):
         # Uniform data → maximum entropy → minimum weight
         X = np.ones((10, 3))

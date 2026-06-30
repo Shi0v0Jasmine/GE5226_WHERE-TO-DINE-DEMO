@@ -1,344 +1,440 @@
-"""
-Where to DINE - Web Demo Application
-=====================================
+"""Flask API and Leaflet product demo for Where to DINE."""
 
-Simple Flask web application for interactive dining hotspot recommendations.
+from __future__ import annotations
 
-Features:
-- Display final hotspots on interactive map
-- Click anywhere to get nearby recommendations
-- View hotspot details and rankings
-
-Author: Where to DINE Project
-Date: 2025-11-09
-"""
-
-from flask import Flask, render_template, request, jsonify
-import geopandas as gpd
-import pandas as pd
-from pathlib import Path
-from shapely.geometry import Point
-import numpy as np
 import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional
 
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+from flask import Flask, jsonify, render_template, request
+from shapely.geometry import Point
+
+from src.analysis.scoring import (
+    MODE_ACCESS_DEFAULTS,
+    PRODUCT_COMPONENTS,
+    PRODUCT_PROFILE_PRIORS,
+    compute_access_score_half_life,
+    compute_product_area_scores,
+    compute_product_recommendation,
+)
+from src.travel_time import BackendUnavailableError, TravelTimeCalculator
+
+
+logger = logging.getLogger(__name__)
 app = Flask(__name__)
+hotspots_data: Optional[gpd.GeoDataFrame] = None
+diagnostic_airport_count = 0
 
-# Global variable to store hotspots data
-hotspots_data = None
+ALLOWED_MODES = {"walk", "bike", "drive"}
+ALLOWED_BACKENDS = {"proxy", "osmnx"}
+ALLOWED_TIME_PROFILES = {"any", "lunch", "dinner", "late_night"}
+VERSION_ALIASES = {
+    "v1": "v1_legacy",
+    "v1_legacy": "v1_legacy",
+    "v2": "v2_entropy_legacy",
+    "v2_entropy_legacy": "v2_entropy_legacy",
+    "v3": "v3_product",
+    "v3_product": "v3_product",
+}
 
 
-def load_hotspots():
-    """Load final hotspots data on startup."""
-    global hotspots_data
-
-    hotspots_path = Path("data/processed/final_hotspots.geojson")
-
-    if not hotspots_path.exists():
-        print("❌ Error: final_hotspots.geojson not found!")
-        print("Please run the pipeline first: python run_pipeline.py")
+def load_hotspots(path: Optional[str] = None) -> Optional[gpd.GeoDataFrame]:
+    """Load the best available hotspot artifact."""
+    global hotspots_data, diagnostic_airport_count
+    candidates = [
+        Path(path) if path else None,
+        Path("data/processed/final_hotspots_v3.geojson"),
+        Path("data/processed/final_hotspots.geojson"),
+    ]
+    hotspot_path = next((item for item in candidates if item and item.exists()), None)
+    if hotspot_path is None:
+        logger.error("No hotspot artifact found. Run the spatial pipeline first.")
+        hotspots_data = None
         return None
-
-    hotspots_data = gpd.read_file(hotspots_path)
-    print(f"✅ Loaded {len(hotspots_data)} hotspots")
-
+    hotspots_data = gpd.read_file(hotspot_path).to_crs("EPSG:4326")
+    diagnostic_path = Path(
+        "data/processed/airport_hotspots_diagnostics.geojson"
+    )
+    diagnostic_airport_count = (
+        len(gpd.read_file(diagnostic_path))
+        if diagnostic_path.exists()
+        else 0
+    )
+    logger.info("Loaded %s hotspots from %s", len(hotspots_data), hotspot_path)
     return hotspots_data
 
 
-@app.route('/')
-def index():
-    """Render the main page."""
-    if hotspots_data is None or len(hotspots_data) == 0:
-        return """
-        <html>
-        <head><title>Where to DINE - Error</title></head>
-        <body style="font-family: Arial; padding: 50px;">
-            <h1>❌ No Data Available</h1>
-            <p>Please run the data processing pipeline first:</p>
-            <pre>python run_pipeline.py</pre>
-            <p>Then restart this application.</p>
-        </body>
-        </html>
-        """
-
-    return render_template('index.html')
+def _parse_bool(value: Optional[str], default: bool = True) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
 
 
-@app.route('/api/hotspots', methods=['GET'])
-def get_all_hotspots():
-    """
-    Get all hotspots for initial map display.
+def _error(message: str, status: int):
+    return jsonify({"error": message}), status
 
-    Returns:
-    --------
-    JSON: GeoJSON FeatureCollection of all hotspots
-    """
+
+def _rankable_hotspots() -> tuple[gpd.GeoDataFrame, int]:
     if hotspots_data is None:
-        return jsonify({"error": "No data loaded"}), 500
-
-    # Convert to GeoJSON
-    geojson = json.loads(hotspots_data.to_json())
-
-    return jsonify(geojson)
-
-
-@app.route('/api/recommend', methods=['POST'])
-def get_recommendations():
-    """
-    Get hotspot recommendations near a user-selected location.
-
-    Input (JSON):
-    -------------
-    {
-        "lat": 40.7589,
-        "lon": -73.9851,
-        "max_distance_km": 2.0,  # optional, default 2km
-        "limit": 10              # optional, default 10
-    }
-
-    Returns:
-    --------
-    JSON: List of recommended hotspots with distances
-    """
-    if hotspots_data is None:
-        return jsonify({"error": "No data loaded"}), 500
-
-    # Parse request
-    data = request.json
-    user_lat = data.get('lat')
-    user_lon = data.get('lon')
-    max_distance_km = data.get('max_distance_km', 2.0)
-    limit = data.get('limit', 10)
-
-    if user_lat is None or user_lon is None:
-        return jsonify({"error": "Missing lat/lon"}), 400
-
-    # Create user location point
-    user_point = Point(user_lon, user_lat)
-    user_gdf = gpd.GeoDataFrame(
-        [{'geometry': user_point}],
-        crs="EPSG:4326"
+        return gpd.GeoDataFrame(), 0
+    if "is_airport" not in hotspots_data.columns:
+        return hotspots_data.copy(), diagnostic_airport_count
+    mask = hotspots_data["is_airport"].fillna(False).astype(bool)
+    return (
+        hotspots_data[~mask].copy(),
+        max(int(mask.sum()), diagnostic_airport_count),
     )
 
-    # Reproject to meters for accurate distance calculation
-    user_gdf_proj = user_gdf.to_crs("EPSG:2263")
-    hotspots_proj = hotspots_data.to_crs("EPSG:2263")
 
-    # Calculate distances from user location to each hotspot centroid
-    user_point_proj = user_gdf_proj.geometry.iloc[0]
+def _time_component(df: pd.DataFrame, time_profile: str) -> np.ndarray:
+    if time_profile == "lunch" and "lunch_peak_score" in df.columns:
+        return df["lunch_peak_score"].fillna(50.0).to_numpy(dtype=float)
+    if time_profile in {"dinner", "late_night"} and "peak_time_score" in df.columns:
+        return df["peak_time_score"].fillna(50.0).to_numpy(dtype=float)
+    return df.get(
+        "time_fit_score_v3",
+        pd.Series(50.0, index=df.index)
+    ).fillna(50.0).to_numpy(dtype=float)
 
-    distances = []
-    for idx, hotspot in hotspots_proj.iterrows():
-        # Distance to hotspot centroid
-        centroid = hotspot.geometry.centroid
-        distance_m = user_point_proj.distance(centroid)
-        distance_km = distance_m / 1000.0
 
-        distances.append({
-            'index': idx,
-            'distance_km': distance_km
-        })
+def _product_components(
+    df: pd.DataFrame,
+    time_profile: str
+) -> np.ndarray:
+    def column(primary: str, fallback: Optional[str] = None) -> np.ndarray:
+        if primary in df.columns:
+            series = df[primary]
+        elif fallback and fallback in df.columns:
+            series = df[fallback]
+        else:
+            series = pd.Series(50.0, index=df.index)
+        return pd.to_numeric(series, errors="coerce").fillna(50.0).to_numpy()
 
-    # Create DataFrame with distances
-    distances_df = pd.DataFrame(distances)
+    return np.column_stack([
+        column("demand_score_v3", "taxi_score_v2"),
+        column("poi_score_v3", "restaurant_score_v2"),
+        _time_component(df, time_profile),
+        column("data_confidence_v3"),
+    ]).astype(float)
 
-    # Merge with hotspots data
-    hotspots_with_dist = hotspots_data.copy()
-    hotspots_with_dist['distance_km'] = distances_df['distance_km'].values
 
-    # Filter by max distance
-    hotspots_nearby = hotspots_with_dist[
-        hotspots_with_dist['distance_km'] <= max_distance_km
-    ].copy()
+@app.route("/")
+def index():
+    if hotspots_data is None or len(hotspots_data) == 0:
+        return (
+            "<h1>No hotspot data</h1><p>Run the processing pipeline first.</p>",
+            503,
+        )
+    return render_template("index.html")
 
-    if len(hotspots_nearby) == 0:
-        return jsonify({
-            "message": f"No hotspots found within {max_distance_km} km",
-            "recommendations": []
-        })
 
-    # Calculate recommendation score using unified TravelTimeCalculator
-    # Backend: proxy (default), osmnx (if graph available), google (if API key)
-    access_method = request.args.get('access_method', 'proxy')  # proxy | osmnx | google
-    user_profile = request.args.get('profile', 'balanced')
-    time_profile = request.args.get('time_profile', 'any')  # any | lunch | dinner | late_night
-    version = request.args.get('version', 'v2')  # v1 | v2
-    travel_mode = request.args.get('mode', 'transit')  # walk | bike | drive | transit
-
+@app.route("/api/hotspots", methods=["GET"])
+def get_all_hotspots():
+    if hotspots_data is None:
+        return _error("No data loaded", 503)
     try:
-        from src.travel_time import TravelTimeCalculator
-        from src.analysis.scoring import compute_access_score_decay, get_profile_weights
+        include_airports = _parse_bool(
+            request.args.get("include_airports"),
+            default=False
+        )
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    frame = hotspots_data
+    if not include_airports and "is_airport" in frame.columns:
+        frame = frame[~frame["is_airport"].fillna(False)]
+    return jsonify(json.loads(frame.to_json()))
 
-        # Initialize travel time calculator with selected backend
-        # Default: proxy (no dependencies). Auto-fallback if osmnx/google unavailable.
-        tt = TravelTimeCalculator(
-            mode=travel_mode,
-            backend=access_method,
-            graph_path=f"data/networks/nyc_{travel_mode}.graphml" if access_method == 'osmnx' else None,
+
+@app.route("/api/recommend", methods=["POST"])
+def get_recommendations():
+    if hotspots_data is None:
+        return _error("No data loaded", 503)
+
+    payload: Dict[str, Any] = request.get_json(silent=True) or {}
+    try:
+        user_lat = float(payload["lat"])
+        user_lon = float(payload["lon"])
+        limit = int(request.args.get("limit", payload.get("limit", 10)))
+        if not (-90 <= user_lat <= 90 and -180 <= user_lon <= 180):
+            raise ValueError("lat/lon are outside valid ranges")
+        if not 1 <= limit <= 50:
+            raise ValueError("limit must be between 1 and 50")
+
+        mode = request.args.get("mode", "walk")
+        backend = request.args.get(
+            "backend",
+            request.args.get("access_method", "proxy")
+        )
+        profile = request.args.get("profile", "balanced")
+        time_profile = request.args.get("time_profile", "any")
+        requested_version = request.args.get(
+            "score_version",
+            request.args.get("version", "v3")
+        )
+        score_version = VERSION_ALIASES.get(requested_version)
+        allow_fallback = _parse_bool(
+            request.args.get("allow_fallback"),
+            default=True
         )
 
-        # Compute travel times from user location to each hotspot
-        user_origin = (user_lat, user_lon)
-        hotspot_centroids = [
-            (float(row.geometry.centroid.y), float(row.geometry.centroid.x))
-            for _, row in hotspots_nearby.iterrows()
-        ]
-        travel_times = tt.matrix([user_origin], hotspot_centroids)[0]  # shape: (n_hotspots,)
+        if mode not in ALLOWED_MODES:
+            raise ValueError(f"mode must be one of {sorted(ALLOWED_MODES)}")
+        if backend not in ALLOWED_BACKENDS:
+            raise ValueError(f"backend must be one of {sorted(ALLOWED_BACKENDS)}")
+        if profile not in PRODUCT_PROFILE_PRIORS:
+            raise ValueError(
+                f"profile must be one of {sorted(PRODUCT_PROFILE_PRIORS)}"
+            )
+        if time_profile not in ALLOWED_TIME_PROFILES:
+            raise ValueError(
+                f"time_profile must be one of {sorted(ALLOWED_TIME_PROFILES)}"
+            )
+        if score_version is None:
+            raise ValueError(
+                f"score_version must be one of {sorted(VERSION_ALIASES)}"
+            )
 
-        # Convert travel time to accessibility score (0-100)
-        hotspots_nearby['accessibility_score'] = compute_access_score_decay(
-            travel_times,
-            max_time_min=30.0,
-            decay_type='exponential',
-            lambda_param=0.3
+        mode_defaults = MODE_ACCESS_DEFAULTS[mode]
+        max_time_min = float(
+            request.args.get("max_time_min", mode_defaults["max_time_min"])
         )
-        hotspots_nearby['travel_time_min'] = travel_times
+        if not 1 <= max_time_min <= 180:
+            raise ValueError("max_time_min must be between 1 and 180")
+    except (KeyError, TypeError, ValueError) as exc:
+        return _error(str(exc), 400)
 
-        # Select popularity score version
-        if version == 'v2' and 'popularity_score_v2' in hotspots_nearby.columns:
-            popularity_col = 'popularity_score_v2'
-        else:
-            popularity_col = 'popularity_score'
+    rankable, airport_excluded = _rankable_hotspots()
+    if len(rankable) == 0:
+        return jsonify({
+            "message": "No rankable dining hotspots are available",
+            "recommendations": [],
+            "excluded_counts": {"airport": airport_excluded},
+        })
 
-        # Adjust demand score based on time profile
-        base_demand = hotspots_nearby[popularity_col].values
-        if time_profile == 'dinner' and 'peak_time_score' in hotspots_nearby.columns:
-            # Evening: boost areas with high peak-time activity
-            peak_time = hotspots_nearby['peak_time_score'].values
-            demand_score = 0.7 * base_demand + 0.3 * peak_time
-        elif time_profile == 'lunch' and 'restaurant_score_v2' in hotspots_nearby.columns:
-            # Lunch: slightly favor restaurant quality
-            poi = hotspots_nearby['restaurant_score_v2'].values
-            demand_score = 0.6 * base_demand + 0.4 * poi
-        else:
-            demand_score = base_demand
+    projected = rankable.to_crs("EPSG:32618")
+    user_projected = gpd.GeoSeries(
+        [Point(user_lon, user_lat)],
+        crs="EPSG:4326"
+    ).to_crs("EPSG:32618").iloc[0]
+    rankable["distance_km"] = (
+        projected.geometry.centroid.distance(user_projected) / 1000.0
+    ).to_numpy()
 
-        # Get preference profile weights
-        weights = get_profile_weights(user_profile)
+    max_distance = payload.get("max_distance_km")
+    if max_distance is not None:
+        try:
+            max_distance = float(max_distance)
+            if max_distance <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return _error("max_distance_km must be positive", 400)
+        rankable = rankable[rankable["distance_km"] <= max_distance].copy()
 
-        # Adjust weights based on time profile
-        if time_profile == 'dinner':
-            weights = {'demand': 0.50, 'poi': 0.25, 'access': 0.15, 'confidence': 0.10}
-        elif time_profile == 'lunch':
-            weights = {'demand': 0.30, 'poi': 0.35, 'access': 0.25, 'confidence': 0.10}
-        elif time_profile == 'late_night':
-            weights = {'demand': 0.50, 'poi': 0.20, 'access': 0.20, 'confidence': 0.10}
+    if len(rankable) == 0:
+        return jsonify({
+            "message": "No hotspots found within the requested distance",
+            "recommendations": [],
+            "excluded_counts": {"airport": airport_excluded},
+        })
 
-        # Compute composite recommendation score
-        from src.analysis.scoring import compute_composite_score
-        hotspots_nearby['recommendation_score'] = compute_composite_score(
-            demand_score=demand_score,
-            poi_score=base_demand,
-            access_score=hotspots_nearby['accessibility_score'].values,
-            weights=weights
+    destination_centroids = gpd.GeoSeries(
+        rankable.to_crs("EPSG:32618").geometry.centroid,
+        crs="EPSG:32618"
+    ).to_crs("EPSG:4326")
+    destinations = [
+        (float(point.y), float(point.x))
+        for point in destination_centroids
+    ]
+    graph_path = (
+        f"data/networks/nyc_{mode}.graphml" if backend == "osmnx" else None
+    )
+    try:
+        calculator = TravelTimeCalculator(
+            mode=mode,
+            backend=backend,
+            graph_path=graph_path,
+            allow_fallback=allow_fallback,
         )
+        travel_times = calculator.matrix(
+            [(user_lat, user_lon)],
+            destinations
+        )[0]
+    except BackendUnavailableError as exc:
+        return _error(str(exc), 503)
+    except Exception:
+        logger.exception("Travel-time computation failed")
+        return _error("Travel-time computation failed", 500)
 
-    except Exception as e:
-        # Fallback to legacy scoring if anything fails
-        logger = logging.getLogger(__name__)
-        logger.warning(f"TravelTimeCalculator failed ({e}), using legacy fallback")
-        max_dist = hotspots_nearby['distance_km'].max()
-        if max_dist > 0:
-            hotspots_nearby['accessibility_score'] = 100 * (1 - hotspots_nearby['distance_km'] / max_dist)
-        else:
-            hotspots_nearby['accessibility_score'] = 100
-        hotspots_nearby['recommendation_score'] = (
-            0.6 * hotspots_nearby['popularity_score'] +
-            0.4 * hotspots_nearby['accessibility_score']
+    rankable["travel_time_min"] = travel_times
+    rankable = rankable[np.isfinite(rankable["travel_time_min"])].copy()
+    rankable = rankable[rankable["travel_time_min"] <= max_time_min].copy()
+    if len(rankable) == 0:
+        return jsonify({
+            "message": "No hotspots are reachable within the time threshold",
+            "recommendations": [],
+            "excluded_counts": {"airport": airport_excluded},
+        })
+
+    access_score = compute_access_score_half_life(
+        rankable["travel_time_min"].to_numpy(),
+        max_time_min=max_time_min,
+        half_life_min=mode_defaults["half_life_min"],
+    )
+    rankable["accessibility_score"] = access_score
+
+    score_components: Dict[str, np.ndarray] = {}
+    effective_weights: Dict[str, float] = {}
+    if score_version == "v3_product":
+        all_components = _product_components(
+            _rankable_hotspots()[0],
+            time_profile
         )
-        hotspots_nearby['travel_time_min'] = hotspots_nearby['distance_km'] * 12  # rough estimate
+        entropy_reference = None
+        if len(all_components):
+            from src.analysis.scoring import compute_entropy_weights
+            entropy_reference = compute_entropy_weights(all_components)
+        components = _product_components(rankable, time_profile)
+        area_score, static_weights = compute_product_area_scores(
+            components,
+            profile_name=profile,
+            entropy_weights=entropy_reference,
+        )
+        recommendation = compute_product_recommendation(
+            area_score,
+            access_score,
+            profile_name=profile,
+        )
+        rankable["area_quality_score"] = area_score
+        rankable["recommendation_score"] = recommendation
+        access_weight = PRODUCT_PROFILE_PRIORS[profile]["access_weight"]
+        effective_weights = {
+            name: float(static_weights[idx] * (1.0 - access_weight))
+            for idx, name in enumerate(PRODUCT_COMPONENTS)
+        }
+        effective_weights["access"] = float(access_weight)
+        score_components = {
+            name: components[:, idx]
+            for idx, name in enumerate(PRODUCT_COMPONENTS)
+        }
+        for name, values in score_components.items():
+            rankable[f"_component_{name}"] = values
+    else:
+        preferred_columns = (
+            ["popularity_score_v2", "topsis_score", "popularity_score"]
+            if score_version == "v2_entropy_legacy"
+            else ["popularity_score", "composite_score", "topsis_score"]
+        )
+        column = next(
+            (candidate for candidate in preferred_columns if candidate in rankable),
+            None,
+        )
+        if column is None:
+            return _error(
+                f"No compatible {score_version} score column is available",
+                503,
+            )
+        area_score = rankable[column].fillna(0.0).to_numpy(dtype=float)
+        if column == "topsis_score" and np.nanmax(area_score) <= 1.0:
+            area_score = area_score * 100.0
+        rankable["area_quality_score"] = area_score
+        rankable["recommendation_score"] = (
+            0.6 * area_score + 0.4 * access_score
+        )
+        effective_weights = {"area_quality": 0.6, "access": 0.4}
+        score_components = {"area_quality": area_score}
+        rankable["_component_area_quality"] = area_score
 
-    # Sort by recommendation score (tie-breaker via stable sort)
-    hotspots_nearby = hotspots_nearby.sort_values(
-        'recommendation_score',
-        ascending=False,
-        kind='mergesort'
+    rankable = rankable.sort_values(
+        ["recommendation_score", "area_quality_score", "accessibility_score"],
+        ascending=[False, False, False],
+        kind="mergesort",
     ).head(limit)
 
-    # Prepare response with profile info
+    backend_info = calculator.info()
     recommendations = []
-    for i, (idx, row) in enumerate(hotspots_nearby.iterrows(), start=1):
-        centroid = row.geometry.centroid
-
-        rec = {
-            'rank': i,
-            'popularity_score': float(row.get(popularity_col, 0)),
-            'recommendation_score': float(row['recommendation_score']),
-            'accessibility_score': float(row['accessibility_score']),
-            'travel_time_min': float(row.get('travel_time_min', row['distance_km'] * 12)),
-            'distance_km': float(row['distance_km']),
-            'n_restaurants': int(row.get('n_restaurants', 0)),
-            'n_taxi_dropoffs': int(row.get('n_taxi_dropoffs', 0)),
-            'avg_rating': float(row.get('avg_rating', 0)) if pd.notna(row.get('avg_rating')) else None,
-            'area_sqkm': float(row.get('intersection_area_sqm', 0) / 1_000_000),
-            'centroid_lat': float(centroid.y),
-            'centroid_lon': float(centroid.x),
-            'geometry': row.geometry.__geo_interface__
+    for rank, (idx, row) in enumerate(rankable.iterrows(), start=1):
+        centroid = gpd.GeoSeries(
+            [row.geometry],
+            crs="EPSG:4326"
+        ).to_crs("EPSG:32618").centroid.to_crs("EPSG:4326").iloc[0]
+        component_payload = {
+            key: float(row[f"_component_{key}"])
+            for key in score_components
         }
-        # Add v2-specific fields if available
-        if 'peak_time_score' in row:
-            rec['peak_time_score'] = float(row['peak_time_score'])
-        if 'accessibility_proxy' in row:
-            rec['accessibility_proxy'] = float(row['accessibility_proxy'])
-        if 'peak_hour_ratio' in row:
-            rec['peak_hour_ratio'] = float(row['peak_hour_ratio'])
-
-        recommendations.append(rec)
+        component_payload["access"] = float(row["accessibility_score"])
+        recommendations.append({
+            "rank": rank,
+            "hotspot_id": str(row.get("hotspot_id", idx)),
+            "recommendation_score": float(row["recommendation_score"]),
+            "area_quality_score": float(row["area_quality_score"]),
+            "accessibility_score": float(row["accessibility_score"]),
+            "travel_time_min": float(row["travel_time_min"]),
+            "distance_km": float(row["distance_km"]),
+            "n_restaurants": int(row.get("n_restaurants", 0)),
+            "n_taxi_dropoffs": int(row.get("n_taxi_dropoffs", 0)),
+            "avg_rating": (
+                float(row["avg_rating"])
+                if pd.notna(row.get("avg_rating"))
+                else None
+            ),
+            "data_confidence": float(
+                row.get("data_confidence_v3", component_payload.get("confidence", 50))
+            ),
+            "score_components": component_payload,
+            "score_weights": effective_weights,
+            "is_estimate": bool(backend_info["is_estimate"]),
+            "centroid_lat": float(centroid.y),
+            "centroid_lon": float(centroid.x),
+            "geometry": row.geometry.__geo_interface__,
+        })
 
     return jsonify({
-        "user_location": {
-            "lat": user_lat,
-            "lon": user_lon
-        },
-        "search_radius_km": max_distance_km,
-        "profile": user_profile,
+        "user_location": {"lat": user_lat, "lon": user_lon},
+        "profile": profile,
         "time_profile": time_profile,
-        "version": version,
-        "travel_mode": travel_mode,
-        "access_backend": access_method,
+        "travel_mode": mode,
+        "requested_backend": backend_info["requested_backend"],
+        "effective_backend": backend_info["effective_backend"],
+        "fallback_reason": backend_info["fallback_reason"],
+        "score_version": score_version,
+        "max_time_min": max_time_min,
+        "excluded_counts": {"airport": airport_excluded},
         "total_found": len(recommendations),
-        "recommendations": recommendations
+        "recommendations": recommendations,
     })
 
 
-@app.route('/api/stats', methods=['GET'])
+@app.route("/api/stats", methods=["GET"])
 def get_stats():
-    """
-    Get overall statistics about the hotspots dataset.
-
-    Returns:
-    --------
-    JSON: Statistics summary
-    """
     if hotspots_data is None:
-        return jsonify({"error": "No data loaded"}), 500
-
-    stats = {
-        "total_hotspots": int(len(hotspots_data)),
-        "total_restaurants": int(hotspots_data['n_restaurants'].sum()),
-        "total_taxi_dropoffs": int(hotspots_data['n_taxi_dropoffs'].sum()),
-        "avg_popularity_score": float(hotspots_data['popularity_score'].mean()),
-        "top_hotspot_score": float(hotspots_data['popularity_score'].max()),
-        "total_area_sqkm": float(hotspots_data['intersection_area_sqm'].sum() / 1_000_000)
-    }
-
-    return jsonify(stats)
-
-
-if __name__ == '__main__':
-    print("="*60)
-    print("WHERE TO DINE - Web Demo")
-    print("="*60)
-
-    # Load data on startup
-    if load_hotspots() is None:
-        print("\n⚠️  Warning: Running without data")
-        print("Please run the pipeline first: python run_pipeline.py\n")
-    else:
-        print(f"\n✅ Ready! Open http://127.0.0.1:5000 in your browser\n")
-
-    # Run Flask app
-    app.run(
-        host='127.0.0.1',
-        port=5000,
-        debug=True
+        return _error("No data loaded", 503)
+    rankable, airport_excluded = _rankable_hotspots()
+    score_column = (
+        "area_quality_score_v3"
+        if "area_quality_score_v3" in rankable.columns
+        else "popularity_score"
     )
+    return jsonify({
+        "total_hotspots": int(len(rankable)),
+        "excluded_airport_hotspots": airport_excluded,
+        "total_restaurants": int(rankable["n_restaurants"].sum()),
+        "total_taxi_dropoffs": int(rankable["n_taxi_dropoffs"].sum()),
+        "avg_area_quality_score": float(rankable[score_column].mean()),
+        "top_area_quality_score": float(rankable[score_column].max()),
+        "scoring_default": "v3_product",
+    })
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    load_hotspots()
+    app.run(host="127.0.0.1", port=5000, debug=False)

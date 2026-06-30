@@ -1,577 +1,560 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Where to DINE - NYC Dining Hotspot Recommender</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Where to DINE | NYC Dining Intelligence</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --ink: #182321;
+      --muted: #65716e;
+      --line: #dfe5e2;
+      --panel: #ffffff;
+      --soft: #f4f7f5;
+      --teal: #187d70;
+      --teal-dark: #105e55;
+      --coral: #dc6a4b;
+      --amber: #d29b32;
+      --shadow: 0 8px 24px rgba(20, 37, 33, 0.08);
+    }
 
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--soft);
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+      letter-spacing: 0;
+      overflow: hidden;
+    }
 
-    <!-- Custom CSS -->
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+    button, select, input { font: inherit; }
+    button:focus-visible, select:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(24, 125, 112, 0.22);
+      outline-offset: 1px;
+    }
 
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-        }
+    .app-shell {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+    }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
+    .topbar {
+      min-height: 64px;
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      z-index: 1001;
+    }
 
-        header {
-            background: white;
-            border-radius: 10px;
-            padding: 20px 30px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
+    .brand { min-width: 220px; }
+    .brand h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      font-weight: 760;
+    }
+    .brand p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
 
-        h1 {
-            color: #333;
-            font-size: 2em;
-            margin-bottom: 5px;
-        }
+    .stats {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .stat {
+      min-width: 96px;
+      padding: 6px 10px;
+      border-left: 1px solid var(--line);
+    }
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+    .stat strong { font-size: 16px; }
 
-        .subtitle {
-            color: #666;
-            font-size: 0.9em;
-        }
+    .controls {
+      min-height: 66px;
+      padding: 8px 18px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(118px, 1fr)) 150px 44px;
+      gap: 8px;
+      align-items: end;
+      background: #f9fbfa;
+      border-bottom: 1px solid var(--line);
+      z-index: 1000;
+    }
 
-        .stats {
-            display: flex;
-            gap: 15px;
-            margin-top: 15px;
-        }
+    .field label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .field select, .field input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid #cfd8d4;
+      border-radius: 6px;
+      color: var(--ink);
+      background: white;
+      padding: 0 9px;
+    }
 
-        .stat-box {
-            background: #f8f9fa;
-            padding: 10px 15px;
-            border-radius: 5px;
-            flex: 1;
-        }
+    .icon-button {
+      width: 40px;
+      height: 34px;
+      border: 1px solid #cfd8d4;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      color: var(--teal-dark);
+      background: white;
+      cursor: pointer;
+    }
+    .icon-button:hover { background: #edf5f2; }
 
-        .stat-label {
-            font-size: 0.75em;
-            color: #666;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+    }
+    #map { width: 100%; height: 100%; }
 
-        .stat-value {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: #667eea;
-        }
+    .sidebar {
+      min-width: 0;
+      overflow-y: auto;
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+    }
 
-        .main-content {
-            display: grid;
-            grid-template-columns: 1fr 350px;
-            gap: 20px;
-        }
+    .sidebar-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.96);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+    }
+    .sidebar-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .sidebar-title h2 {
+      margin: 0;
+      font-size: 15px;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 190px;
+      color: var(--muted);
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .status.estimated { color: #9b6113; }
+    .query-location {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
 
-        .map-container {
-            background: white;
-            border-radius: 10px;
-            overflow: hidden;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            height: 700px;
-        }
+    .results {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
 
-        #map {
-            width: 100%;
-            height: 100%;
-        }
+    .empty {
+      padding: 48px 24px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .empty svg { margin-bottom: 10px; color: var(--teal); }
 
-        .sidebar {
-            background: white;
-            border-radius: 10px;
-            padding: 25px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            height: 700px;
-            overflow-y: auto;
-        }
+    .result-card {
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      cursor: pointer;
+      transition: border-color 140ms ease, box-shadow 140ms ease;
+    }
+    .result-card:hover {
+      border-color: #9bc5bb;
+      box-shadow: var(--shadow);
+    }
 
-        .sidebar h2 {
-            color: #333;
-            margin-bottom: 15px;
-            font-size: 1.3em;
-        }
+    .result-top {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: center;
+    }
+    .rank {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      color: white;
+      background: var(--teal);
+      font-size: 12px;
+      font-weight: 750;
+    }
+    .result-name {
+      min-width: 0;
+      margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .result-meta {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .score {
+      color: var(--teal-dark);
+      font-size: 20px;
+      font-weight: 780;
+    }
 
-        .instructions {
-            background: #f0f7ff;
-            border-left: 4px solid #667eea;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            font-size: 0.9em;
-        }
+    .metrics {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    .metric {
+      padding: 7px;
+      border-radius: 6px;
+      background: var(--soft);
+    }
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 9px;
+      text-transform: uppercase;
+    }
+    .metric strong { font-size: 12px; }
 
-        .search-info {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 5px;
-            margin-bottom: 15px;
-            font-size: 0.85em;
-        }
+    .breakdown { margin-top: 10px; }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr) 30px;
+      gap: 6px;
+      align-items: center;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .bar-track {
+      height: 5px;
+      border-radius: 3px;
+      overflow: hidden;
+      background: #e6ebe8;
+    }
+    .bar-fill { height: 100%; background: var(--teal); }
+    .bar-row:nth-child(2) .bar-fill { background: var(--coral); }
+    .bar-row:nth-child(3) .bar-fill { background: var(--amber); }
 
-        .recommendation-list {
-            margin-top: 15px;
-        }
+    .leaflet-popup-content { margin: 10px 12px; }
+    .map-popup strong { display: block; margin-bottom: 4px; }
+    .map-popup span { color: var(--muted); font-size: 11px; }
 
-        .recommendation-card {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 12px;
-            border-left: 4px solid #667eea;
-            transition: transform 0.2s, box-shadow 0.2s;
-            cursor: pointer;
-        }
+    @media (max-width: 980px) {
+      body { overflow: auto; }
+      .app-shell { min-height: 100%; height: auto; }
+      .topbar { align-items: flex-start; }
+      .stats { display: none; }
+      .controls {
+        grid-template-columns: repeat(3, minmax(110px, 1fr));
+      }
+      .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(440px, 58vh) auto;
+      }
+      .sidebar {
+        max-height: none;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+    }
 
-        .recommendation-card:hover {
-            transform: translateX(5px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-
-        .rec-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-
-        .rec-rank {
-            background: #667eea;
-            color: white;
-            padding: 3px 10px;
-            border-radius: 15px;
-            font-size: 0.8em;
-            font-weight: bold;
-        }
-
-        .rec-score {
-            font-size: 1.3em;
-            font-weight: bold;
-            color: #667eea;
-        }
-
-        .rec-details {
-            font-size: 0.85em;
-            color: #666;
-            margin-top: 5px;
-        }
-
-        .rec-detail-row {
-            margin: 3px 0;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 30px;
-            color: #666;
-        }
-
-        .no-results {
-            text-align: center;
-            padding: 30px;
-            color: #999;
-        }
-
-        .spinner {
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .legend {
-            background: white;
-            padding: 15px;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        }
-
-        .legend-title {
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-
-        .legend-item {
-            display: flex;
-            align-items: center;
-            margin: 5px 0;
-            font-size: 0.85em;
-        }
-
-        .legend-color {
-            width: 20px;
-            height: 20px;
-            border-radius: 3px;
-            margin-right: 10px;
-        }
-
-        @media (max-width: 1024px) {
-            .main-content {
-                grid-template-columns: 1fr;
-            }
-
-            .sidebar {
-                height: auto;
-                max-height: 600px;
-            }
-        }
-    </style>
+    @media (max-width: 600px) {
+      .topbar { min-height: 56px; padding: 9px 12px; }
+      .brand h1 { font-size: 17px; }
+      .controls {
+        padding: 8px 10px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .icon-button { width: 100%; }
+      .workspace { grid-template-rows: 52vh auto; }
+      .metrics { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>🍽️ Where to DINE</h1>
-            <p class="subtitle">NYC Dining Hotspot Recommender - Data-Driven Restaurant Discovery</p>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Where to DINE</h1>
+        <p>NYC dining district intelligence</p>
+      </div>
+      <div class="stats">
+        <div class="stat"><span>Districts</span><strong id="stat-hotspots">--</strong></div>
+        <div class="stat"><span>Restaurants</span><strong id="stat-restaurants">--</strong></div>
+        <div class="stat"><span>Taxi arrivals</span><strong id="stat-taxi">--</strong></div>
+      </div>
+    </header>
 
-            <div class="stats" id="stats">
-                <div class="stat-box">
-                    <div class="stat-label">Total Hotspots</div>
-                    <div class="stat-value" id="stat-hotspots">-</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Restaurants</div>
-                    <div class="stat-value" id="stat-restaurants">-</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Taxi Dropoffs</div>
-                    <div class="stat-value" id="stat-dropoffs">-</div>
-                </div>
-                <div class="stat-box">
-                    <div class="stat-label">Avg Score</div>
-                    <div class="stat-value" id="stat-avg-score">-</div>
-                </div>
-            </div>
-        </header>
+    <section class="controls" aria-label="Recommendation controls">
+      <div class="field">
+        <label for="profile">Profile</label>
+        <select id="profile">
+          <option value="balanced">Balanced</option>
+          <option value="quality_seeker">Quality seeker</option>
+          <option value="convenience">Convenience</option>
+          <option value="local_gem">Local gem</option>
+          <option value="late_night">Late night</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="time-profile">Time</label>
+        <select id="time-profile">
+          <option value="any">Any time</option>
+          <option value="lunch">Lunch</option>
+          <option value="dinner">Dinner</option>
+          <option value="late_night">Late night</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="mode">Travel mode</label>
+        <select id="mode">
+          <option value="walk">Walk</option>
+          <option value="bike">Bike</option>
+          <option value="drive">Drive</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="backend">Routing</label>
+        <select id="backend">
+          <option value="osmnx">OSM network</option>
+          <option value="proxy">Estimate</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="score-version">Scoring</label>
+        <select id="score-version">
+          <option value="v3">Product v3</option>
+          <option value="v2">Entropy v2</option>
+          <option value="v1">Legacy v1</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="max-time">Max minutes</label>
+        <input id="max-time" type="number" min="5" max="180" value="30">
+      </div>
+      <button class="icon-button" id="reset-map" title="Reset map" aria-label="Reset map">
+        <i data-lucide="locate-fixed" width="17" height="17"></i>
+      </button>
+    </section>
 
-        <div class="main-content">
-            <div class="map-container">
-                <div id="map"></div>
-            </div>
-
-            <div class="sidebar">
-                <h2>📍 Find Dining Hotspots</h2>
-
-                <div class="instructions">
-                    <strong>How to use:</strong><br>
-                    1. Click anywhere on the map<br>
-                    2. See nearby dining hotspots ranked by popularity & distance<br>
-                    3. Click on a recommendation to view on map
-                </div>
-
-                <div id="search-info" style="display: none;"></div>
-
-                <div id="recommendations">
-                    <p style="color: #999; text-align: center; padding: 30px;">
-                        👆 Click on the map to get recommendations
-                    </p>
-                </div>
-            </div>
+    <section class="workspace">
+      <div id="map" aria-label="NYC dining hotspot map"></div>
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <div class="sidebar-title">
+            <h2>Recommendations</h2>
+            <span class="status" id="backend-status">
+              <i data-lucide="route" width="13" height="13"></i>
+              Select a map location
+            </span>
+          </div>
+          <div class="query-location" id="query-location">NYC</div>
         </div>
-    </div>
+        <div class="results" id="results">
+          <div class="empty">
+            <i data-lucide="map-pin" width="28" height="28"></i>
+            <div>Select a point on the map</div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
 
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const NYC_CENTER = [40.7128, -74.0060];
+    const map = L.map("map", { zoomControl: true }).setView(NYC_CENTER, 11);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OpenStreetMap &copy; CARTO",
+      maxZoom: 19
+    }).addTo(map);
 
-    <!-- Custom JS -->
-    <script>
-        // Initialize map centered on NYC
-        const map = L.map('map').setView([40.7128, -74.0060], 11);
+    let hotspotsLayer = L.geoJSON(null).addTo(map);
+    let selectedMarker = null;
+    let highlighted = null;
+    let lastLocation = null;
 
-        // Add tile layer
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-            maxZoom: 19
-        }).addTo(map);
+    const number = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
+    const results = document.getElementById("results");
+    const statusEl = document.getElementById("backend-status");
 
-        // Layers
-        let hotspotsLayer = L.layerGroup().addTo(map);
-        let userMarker = null;
-        let userCircle = null;
-        let highlightedHotspot = null;
+    function colorForScore(score) {
+      if (score >= 70) return "#187d70";
+      if (score >= 40) return "#d29b32";
+      return "#dc6a4b";
+    }
 
-        // Store hotspots data
-        let hotspotsData = null;
+    async function loadStats() {
+      const response = await fetch("/api/stats");
+      if (!response.ok) return;
+      const stats = await response.json();
+      document.getElementById("stat-hotspots").textContent = number.format(stats.total_hotspots);
+      document.getElementById("stat-restaurants").textContent = number.format(stats.total_restaurants);
+      document.getElementById("stat-taxi").textContent = number.format(stats.total_taxi_dropoffs);
+    }
 
-        // Color scale function
-        function getColor(score) {
-            if (score >= 80) return '#FF0000';
-            if (score >= 60) return '#FFA500';
-            if (score >= 40) return '#FFD700';
-            return '#FFFF00';
+    async function loadHotspots() {
+      const response = await fetch("/api/hotspots");
+      if (!response.ok) return;
+      const geojson = await response.json();
+      hotspotsLayer.clearLayers();
+      hotspotsLayer = L.geoJSON(geojson, {
+        style: feature => {
+          const p = feature.properties;
+          const score = p.area_quality_score_v3 ?? p.popularity_score_v2 ?? p.popularity_score ?? 0;
+          return { color: colorForScore(score), weight: 1.5, fillOpacity: 0.18 };
+        },
+        onEachFeature: (feature, layer) => {
+          const p = feature.properties;
+          const score = p.area_quality_score_v3 ?? p.popularity_score_v2 ?? p.popularity_score ?? 0;
+          layer.bindPopup(`<div class="map-popup"><strong>Dining district</strong><span>Quality ${score.toFixed(1)} · ${p.n_restaurants || 0} restaurants</span></div>`);
         }
+      }).addTo(map);
+    }
 
-        // Load stats
-        async function loadStats() {
-            try {
-                const response = await fetch('/api/stats');
-                const stats = await response.json();
+    function controls() {
+      return {
+        profile: document.getElementById("profile").value,
+        time_profile: document.getElementById("time-profile").value,
+        mode: document.getElementById("mode").value,
+        backend: document.getElementById("backend").value,
+        score_version: document.getElementById("score-version").value,
+        max_time_min: document.getElementById("max-time").value
+      };
+    }
 
-                document.getElementById('stat-hotspots').textContent = stats.total_hotspots;
-                document.getElementById('stat-restaurants').textContent = stats.total_restaurants.toLocaleString();
-                document.getElementById('stat-dropoffs').textContent = stats.total_taxi_dropoffs.toLocaleString();
-                document.getElementById('stat-avg-score').textContent = stats.avg_popularity_score.toFixed(1);
-            } catch (error) {
-                console.error('Error loading stats:', error);
-            }
-        }
+    function renderBar(label, value) {
+      const safe = Math.max(0, Math.min(100, Number(value || 0)));
+      return `<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill" style="width:${safe}%"></div></div><strong>${safe.toFixed(0)}</strong></div>`;
+    }
 
-        // Load and display all hotspots
-        async function loadHotspots() {
-            try {
-                const response = await fetch('/api/hotspots');
-                hotspotsData = await response.json();
-
-                hotspotsLayer.clearLayers();
-
-                hotspotsData.features.forEach(feature => {
-                    const props = feature.properties;
-                    const score = props.popularity_score || 0;
-                    const rank = props.rank || 0;
-
-                    const polygon = L.geoJSON(feature, {
-                        style: {
-                            color: '#333',
-                            weight: 2,
-                            fillColor: getColor(score),
-                            fillOpacity: 0.4
-                        }
-                    });
-
-                    const popupContent = `
-                        <strong>Rank #${rank}</strong><br>
-                        <strong>Score:</strong> ${score.toFixed(1)}/100<br>
-                        <strong>Restaurants:</strong> ${props.n_restaurants || 0}<br>
-                        <strong>Taxi Dropoffs:</strong> ${(props.n_taxi_dropoffs || 0).toLocaleString()}<br>
-                        <strong>Avg Rating:</strong> ${props.avg_rating ? props.avg_rating.toFixed(2) : 'N/A'}
-                    `;
-
-                    polygon.bindPopup(popupContent);
-                    polygon.addTo(hotspotsLayer);
-                });
-
-                console.log(`Loaded ${hotspotsData.features.length} hotspots`);
-            } catch (error) {
-                console.error('Error loading hotspots:', error);
-            }
-        }
-
-        // Handle map click - get recommendations
-        map.on('click', async function(e) {
-            const lat = e.latlng.lat;
-            const lon = e.latlng.lng;
-
-            // Remove previous user marker
-            if (userMarker) {
-                map.removeLayer(userMarker);
-            }
-            if (userCircle) {
-                map.removeLayer(userCircle);
-            }
-
-            // Add new marker
-            userMarker = L.marker([lat, lon], {
-                icon: L.icon({
-                    iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
-                    shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                    iconSize: [25, 41],
-                    iconAnchor: [12, 41],
-                    popupAnchor: [1, -34],
-                    shadowSize: [41, 41]
-                })
-            }).addTo(map);
-
-            // Add search radius circle (2km)
-            userCircle = L.circle([lat, lon], {
-                radius: 2000,
-                color: '#3388ff',
-                fillColor: '#3388ff',
-                fillOpacity: 0.1,
-                weight: 2,
-                dashArray: '5, 5'
-            }).addTo(map);
-
-            // Show loading
-            document.getElementById('recommendations').innerHTML = `
-                <div class="loading">
-                    <div class="spinner"></div>
-                    <p>Finding nearby hotspots...</p>
-                </div>
-            `;
-
-            // Fetch recommendations
-            try {
-                const response = await fetch('/api/recommend', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        lat: lat,
-                        lon: lon,
-                        max_distance_km: 2.0,
-                        limit: 10
-                    })
-                });
-
-                const data = await response.json();
-
-                // Show search info
-                const searchInfo = document.getElementById('search-info');
-                searchInfo.style.display = 'block';
-                searchInfo.innerHTML = `
-                    📍 <strong>Search Location:</strong> ${lat.toFixed(4)}, ${lon.toFixed(4)}<br>
-                    🔍 <strong>Search Radius:</strong> ${data.search_radius_km} km<br>
-                    ✅ <strong>Found:</strong> ${data.total_found} hotspot${data.total_found !== 1 ? 's' : ''}
-                `;
-
-                // Display recommendations
-                displayRecommendations(data.recommendations);
-
-            } catch (error) {
-                console.error('Error getting recommendations:', error);
-                document.getElementById('recommendations').innerHTML = `
-                    <div class="no-results">
-                        <p>❌ Error loading recommendations</p>
-                    </div>
-                `;
-            }
+    function renderResults(data) {
+      const items = data.recommendations || [];
+      statusEl.classList.toggle("estimated", data.effective_backend === "proxy");
+      statusEl.innerHTML = `<i data-lucide="${data.effective_backend === "proxy" ? "triangle-alert" : "route"}" width="13" height="13"></i>${data.effective_backend}${data.fallback_reason ? " · estimated" : ""}`;
+      if (!items.length) {
+        results.innerHTML = `<div class="empty"><i data-lucide="circle-off" width="28" height="28"></i><div>${data.message || "No reachable districts"}</div></div>`;
+        lucide.createIcons();
+        return;
+      }
+      results.innerHTML = items.map(item => {
+        const components = item.score_components || {};
+        const bars = Object.entries(components)
+          .filter(([name]) => name !== "access")
+          .slice(0, 3)
+          .map(([name, value]) => renderBar(name, value))
+          .join("");
+        return `<article class="result-card" data-lat="${item.centroid_lat}" data-lon="${item.centroid_lon}" data-geometry='${JSON.stringify(item.geometry)}'>
+          <div class="result-top">
+            <div class="rank">${item.rank}</div>
+            <div>
+              <h3 class="result-name">Dining district ${item.rank}</h3>
+              <div class="result-meta">${item.n_restaurants} restaurants · confidence ${item.data_confidence.toFixed(0)}</div>
+            </div>
+            <div class="score">${item.recommendation_score.toFixed(1)}</div>
+          </div>
+          <div class="metrics">
+            <div class="metric"><span>Travel</span><strong>${item.travel_time_min.toFixed(0)} min</strong></div>
+            <div class="metric"><span>Area</span><strong>${item.area_quality_score.toFixed(0)}</strong></div>
+            <div class="metric"><span>Access</span><strong>${item.accessibility_score.toFixed(0)}</strong></div>
+          </div>
+          <div class="breakdown">${bars}</div>
+        </article>`;
+      }).join("");
+      document.querySelectorAll(".result-card").forEach(card => {
+        card.addEventListener("click", () => {
+          const geometry = JSON.parse(card.dataset.geometry);
+          if (highlighted) map.removeLayer(highlighted);
+          highlighted = L.geoJSON(geometry, {
+            style: { color: "#182321", weight: 3, fillOpacity: 0.08 }
+          }).addTo(map);
+          map.flyTo([Number(card.dataset.lat), Number(card.dataset.lon)], 14);
         });
+      });
+      lucide.createIcons();
+    }
 
-        // Display recommendations
-        function displayRecommendations(recommendations) {
-            const container = document.getElementById('recommendations');
-
-            if (recommendations.length === 0) {
-                container.innerHTML = `
-                    <div class="no-results">
-                        <p>😕 No hotspots found within 2 km</p>
-                        <p style="font-size: 0.85em; margin-top: 10px;">Try clicking closer to Manhattan or Brooklyn</p>
-                    </div>
-                `;
-                return;
-            }
-
-            let html = '<div class="recommendation-list">';
-
-            recommendations.forEach((rec, index) => {
-                html += `
-                    <div class="recommendation-card" onclick="highlightHotspot(${rec.centroid_lat}, ${rec.centroid_lon})">
-                        <div class="rec-header">
-                            <div class="rec-rank">Rank #${rec.rank}</div>
-                            <div class="rec-score">${rec.recommendation_score.toFixed(1)}</div>
-                        </div>
-                        <div class="rec-details">
-                            <div class="rec-detail-row">
-                                <strong>📍 Distance:</strong> ${rec.distance_km.toFixed(2)} km
-                            </div>
-                            <div class="rec-detail-row">
-                                <strong>🏆 Popularity:</strong> ${rec.popularity_score.toFixed(1)}/100
-                            </div>
-                            <div class="rec-detail-row">
-                                <strong>🍴 Restaurants:</strong> ${rec.n_restaurants}
-                            </div>
-                            <div class="rec-detail-row">
-                                <strong>🚕 Taxi Dropoffs:</strong> ${rec.n_taxi_dropoffs.toLocaleString()}
-                            </div>
-                            ${rec.avg_rating ? `
-                            <div class="rec-detail-row">
-                                <strong>⭐ Avg Rating:</strong> ${rec.avg_rating.toFixed(2)}
-                            </div>
-                            ` : ''}
-                        </div>
-                    </div>
-                `;
-            });
-
-            html += '</div>';
-            container.innerHTML = html;
-        }
-
-        // Highlight a hotspot on the map
-        function highlightHotspot(lat, lon) {
-            // Remove previous highlight
-            if (highlightedHotspot) {
-                map.removeLayer(highlightedHotspot);
-            }
-
-            // Add highlight marker
-            highlightedHotspot = L.circleMarker([lat, lon], {
-                radius: 15,
-                color: '#FF0000',
-                fillColor: '#FF0000',
-                fillOpacity: 0.3,
-                weight: 3
-            }).addTo(map);
-
-            // Pan to location
-            map.flyTo([lat, lon], 14, {
-                duration: 1
-            });
-
-            // Remove highlight after 3 seconds
-            setTimeout(() => {
-                if (highlightedHotspot) {
-                    map.removeLayer(highlightedHotspot);
-                    highlightedHotspot = null;
-                }
-            }, 3000);
-        }
-
-        // Add legend
-        const legend = L.control({ position: 'bottomright' });
-        legend.onAdd = function(map) {
-            const div = L.DomUtil.create('div', 'legend');
-            div.innerHTML = `
-                <div class="legend-title">Hotspot Quality</div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FF0000;"></div>
-                    <span>High (80-100)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FFA500;"></div>
-                    <span>Medium-High (60-80)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FFD700;"></div>
-                    <span>Medium (40-60)</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-color" style="background: #FFFF00;"></div>
-                    <span>Low (0-40)</span>
-                </div>
-            `;
-            return div;
-        };
-        legend.addTo(map);
-
-        // Initialize on page load
-        window.addEventListener('load', () => {
-            loadStats();
-            loadHotspots();
+    async function requestRecommendations(lat, lon) {
+      lastLocation = [lat, lon];
+      const params = new URLSearchParams({ ...controls(), allow_fallback: "true", limit: "10" });
+      results.innerHTML = `<div class="empty"><i data-lucide="loader-circle" width="28" height="28"></i><div>Calculating routes</div></div>`;
+      lucide.createIcons();
+      try {
+        const response = await fetch(`/api/recommend?${params}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat, lon })
         });
-    </script>
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Request failed");
+        document.getElementById("query-location").textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+        renderResults(data);
+      } catch (error) {
+        results.innerHTML = `<div class="empty"><i data-lucide="triangle-alert" width="28" height="28"></i><div>${error.message}</div></div>`;
+        lucide.createIcons();
+      }
+    }
+
+    map.on("click", event => {
+      if (selectedMarker) map.removeLayer(selectedMarker);
+      selectedMarker = L.circleMarker(event.latlng, {
+        radius: 7, color: "#182321", weight: 2, fillColor: "#ffffff", fillOpacity: 1
+      }).addTo(map);
+      requestRecommendations(event.latlng.lat, event.latlng.lng);
+    });
+
+    document.querySelectorAll(".controls select, .controls input").forEach(control => {
+      control.addEventListener("change", () => {
+        if (lastLocation) requestRecommendations(...lastLocation);
+      });
+    });
+    document.getElementById("reset-map").addEventListener("click", () => map.setView(NYC_CENTER, 11));
+    loadStats();
+    loadHotspots();
+    lucide.createIcons();
+  </script>
 </body>
 </html>

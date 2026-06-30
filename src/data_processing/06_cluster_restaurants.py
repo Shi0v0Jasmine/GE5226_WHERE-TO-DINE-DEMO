@@ -30,6 +30,7 @@ from sklearn.metrics import silhouette_score, davies_bouldin_score
 import sys
 sys.path.append(str(Path(__file__).parent.parent))
 from utils.config_loader import load_config, get_config_value
+from analysis.scoring import compute_bayesian_rating
 
 # Setup logging
 logging.basicConfig(
@@ -80,12 +81,12 @@ def prepare_clustering_data(gdf: gpd.GeoDataFrame) -> Tuple[np.ndarray, gpd.GeoD
     coords : np.ndarray
         Nx2 array of (x, y) coordinates in meters
     gdf_proj : gpd.GeoDataFrame
-        GeoDataFrame projected to EPSG:2263
+        GeoDataFrame projected to EPSG:32618
     """
     logger.info("Preparing data for clustering...")
 
     # Project to NAD83 / NY Long Island (meters)
-    crs_projected = "EPSG:2263"
+    crs_projected = "EPSG:32618"
     gdf_proj = gdf.to_crs(crs_projected)
 
     # Extract coordinates
@@ -262,8 +263,36 @@ def create_dining_zones(
         zone_area_sqm = zone_polygon.area
         zone_area_sqkm = zone_area_sqm / 1_000_000
 
-        # Average rating (if available)
-        avg_rating = cluster_restaurants['rating'].mean() if 'rating' in cluster_restaurants.columns else None
+        # Rating evidence. Missing OSM ratings remain visible through coverage.
+        ratings = pd.to_numeric(
+            cluster_restaurants.get('rating', pd.Series(index=cluster_restaurants.index, dtype=float)),
+            errors='coerce'
+        )
+        reviews = pd.to_numeric(
+            cluster_restaurants.get(
+                'user_ratings_total',
+                pd.Series(0, index=cluster_restaurants.index, dtype=float)
+            ),
+            errors='coerce'
+        ).fillna(0).clip(lower=0)
+        rated_mask = ratings.between(1, 5, inclusive='both')
+        n_rated_restaurants = int(rated_mask.sum())
+        rating_coverage = n_rated_restaurants / n_restaurants if n_restaurants else 0.0
+        avg_rating = float(ratings[rated_mask].mean()) if n_rated_restaurants else None
+        total_review_count = float(reviews[rated_mask].sum())
+        if n_rated_restaurants:
+            bayesian_values = compute_bayesian_rating(
+                ratings[rated_mask].to_numpy(),
+                reviews[rated_mask].to_numpy(),
+                global_mean=float(ratings[rated_mask].mean()),
+                prior_reviews=50.0
+            )
+            bayesian_rating = float(np.average(
+                bayesian_values,
+                weights=np.maximum(reviews[rated_mask].to_numpy(), 1.0)
+            ))
+        else:
+            bayesian_rating = None
 
         zones.append({
             'cluster_id': cluster_id,
@@ -271,6 +300,10 @@ def create_dining_zones(
             'area_sqm': zone_area_sqm,
             'area_sqkm': zone_area_sqkm,
             'avg_rating': avg_rating,
+            'bayesian_rating': bayesian_rating,
+            'n_rated_restaurants': n_rated_restaurants,
+            'rating_coverage': rating_coverage,
+            'total_review_count': total_review_count,
             'geometry': zone_polygon
         })
 

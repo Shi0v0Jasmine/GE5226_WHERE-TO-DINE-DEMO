@@ -1,193 +1,312 @@
-"""
-Download 2014 NYC Yellow Taxi data for a full month (incremental, resumable).
+"""Resumable daily downloader for NYC 2014 Yellow Taxi coordinate data."""
 
-Writes each page to a separate Parquet chunk, then merges at the end.
-This avoids loading all ~15M records into memory at once.
-
-Usage:
-    python scripts/download_2014_taxi_month.py --start 2014-01-01 --end 2014-02-01
-
-Output:
-    data/raw/taxi_2014/yellow_tripdata_2014_YYYY-MM.parquet
-
-Author: Where to DINE Project
-Date: 2026-06-26
-"""
+from __future__ import annotations
 
 import argparse
-import requests
-import pandas as pd
-import time
+import hashlib
+import json
 import logging
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
-import pyarrow as pa
-import pyarrow.parquet as pq
+from typing import Dict, Iterable, Optional
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+import pandas as pd
+import requests
+
+
 logger = logging.getLogger(__name__)
-
 SODA_ENDPOINT = "https://data.cityofnewyork.us/resource/gkne-dk5s.json"
 FIELDS = [
-    "pickup_longitude", "pickup_latitude",
-    "dropoff_longitude", "dropoff_latitude",
-    "dropoff_datetime", "pickup_datetime",
-    "passenger_count", "trip_distance"
+    "pickup_longitude",
+    "pickup_latitude",
+    "dropoff_longitude",
+    "dropoff_latitude",
+    "dropoff_datetime",
+    "pickup_datetime",
+    "passenger_count",
+    "trip_distance",
 ]
-PAGE_SIZE = 50000
+NUMERIC_FIELDS = [
+    "pickup_longitude",
+    "pickup_latitude",
+    "dropoff_longitude",
+    "dropoff_latitude",
+    "passenger_count",
+    "trip_distance",
+]
+PAGE_SIZE = 50_000
 
 
-def download_and_save(start_date, end_date, output_dir, chunk_dir):
-    """
-    Download all records for a date range, saving each page as a separate Parquet chunk.
+def iter_days(start: date, end: date) -> Iterable[date]:
+    """Yield dates in the half-open interval [start, end)."""
+    current = start
+    while current < end:
+        yield current
+        current += timedelta(days=1)
 
-    Returns:
-    --------
-    int : total records downloaded
-    """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    chunk_path = Path(chunk_dir)
-    chunk_path.mkdir(parents=True, exist_ok=True)
 
-    offset = 0
-    page = 0
-    total_records = 0
-    empty_page_count = 0
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def normalize_page(records: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(records)
+    for column in FIELDS:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    for column in NUMERIC_FIELDS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    for column in ("pickup_datetime", "dropoff_datetime"):
+        frame[column] = pd.to_datetime(frame[column], errors="coerce")
+    return frame[FIELDS]
+
+
+def request_page(
+    session: requests.Session,
+    day: date,
+    offset: int,
+    page_size: int = PAGE_SIZE,
+    retries: int = 5,
+) -> list[dict]:
+    start = f"{day.isoformat()}T00:00:00"
+    end = f"{(day + timedelta(days=1)).isoformat()}T00:00:00"
+    params = {
+        "$select": ",".join(FIELDS),
+        "$where": f"dropoff_datetime >= '{start}' AND dropoff_datetime < '{end}'",
+        "$order": "dropoff_datetime,pickup_datetime",
+        "$limit": page_size,
+        "$offset": offset,
+    }
+    for attempt in range(retries):
+        try:
+            response = session.get(
+                SODA_ENDPOINT,
+                params=params,
+                timeout=120,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.RequestException, ValueError) as exc:
+            if attempt == retries - 1:
+                raise RuntimeError(
+                    f"Failed downloading {day} at offset {offset}"
+                ) from exc
+            delay = min(2 ** attempt, 30)
+            logger.warning(
+                "Retrying %s offset %s in %ss: %s",
+                day,
+                offset,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    return []
+
+
+def existing_chunk_offset(chunk_dir: Path) -> int:
+    total = 0
+    for chunk in sorted(chunk_dir.glob("chunk_*.parquet")):
+        total += len(pd.read_parquet(chunk, columns=["dropoff_datetime"]))
+    return total
+
+
+def merge_day_chunks(chunk_dir: Path, output_path: Path) -> Dict[str, object]:
+    chunks = sorted(chunk_dir.glob("chunk_*.parquet"))
+    if not chunks:
+        raise RuntimeError(f"No chunks found in {chunk_dir}")
+    frame = pd.concat(
+        [pd.read_parquet(path) for path in chunks],
+        ignore_index=True,
+    )
+    before_dedup = len(frame)
+    frame = frame.drop_duplicates(subset=FIELDS).sort_values(
+        ["dropoff_datetime", "pickup_datetime"],
+        kind="mergesort",
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_parquet(output_path, compression="snappy", index=False)
+    for chunk in chunks:
+        chunk.unlink()
+    chunk_dir.rmdir()
+    return {
+        "rows": int(len(frame)),
+        "duplicates_removed": int(before_dedup - len(frame)),
+        "date_min": str(frame["dropoff_datetime"].min()),
+        "date_max": str(frame["dropoff_datetime"].max()),
+        "size_bytes": int(output_path.stat().st_size),
+        "sha256": file_sha256(output_path),
+    }
+
+
+def validate_existing_day(
+    output_path: Path,
+    day: date,
+) -> Dict[str, object]:
+    """Validate, deduplicate, and repair an existing daily file if necessary."""
+    frame = pd.read_parquet(output_path)
+    timestamps = pd.to_datetime(frame["dropoff_datetime"], errors="coerce")
+    start = pd.Timestamp(day)
+    end = start + pd.Timedelta(days=1)
+    valid = timestamps.ge(start) & timestamps.lt(end)
+    before = len(frame)
+    frame = frame.loc[valid].copy()
+    frame["dropoff_datetime"] = timestamps.loc[valid]
+    if "pickup_datetime" in frame:
+        frame["pickup_datetime"] = pd.to_datetime(
+            frame["pickup_datetime"],
+            errors="coerce",
+        )
+    frame = frame.drop_duplicates(subset=FIELDS).sort_values(
+        ["dropoff_datetime", "pickup_datetime"],
+        kind="mergesort",
+    )
+    removed = before - len(frame)
+    if removed:
+        frame.to_parquet(output_path, compression="snappy", index=False)
+    return {
+        "rows": int(len(frame)),
+        "duplicates_removed": int(removed),
+        "date_min": str(frame["dropoff_datetime"].min()),
+        "date_max": str(frame["dropoff_datetime"].max()),
+        "size_bytes": int(output_path.stat().st_size),
+        "sha256": file_sha256(output_path),
+        "status": "existing_repaired" if removed else "existing",
+    }
+
+
+def download_day(
+    day: date,
+    output_dir: Path,
+    chunk_root: Path,
+    session: Optional[requests.Session] = None,
+    page_size: int = PAGE_SIZE,
+) -> Dict[str, object]:
+    output_path = output_dir / f"yellow_tripdata_{day.isoformat()}.parquet"
+    if output_path.exists():
+        return validate_existing_day(output_path, day)
+
+    session = session or requests.Session()
+    chunk_dir = chunk_root / day.isoformat()
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    offset = existing_chunk_offset(chunk_dir)
+    page = len(list(chunk_dir.glob("chunk_*.parquet")))
 
     while True:
-        params = {
-            "$select": ",".join(FIELDS),
-            "$limit": PAGE_SIZE,
-            "$offset": offset,
-            "$where": f"dropoff_datetime between '{start_date}' and '{end_date}'",
-            "$order": "dropoff_datetime"
-        }
-
-        try:
-            response = requests.get(SODA_ENDPOINT, params=params, timeout=120)
-            response.raise_for_status()
-            records = response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Download failed at offset {offset}: {e}")
-            break
-
+        records = request_page(session, day, offset, page_size=page_size)
         if not records:
-            empty_page_count += 1
-            if empty_page_count >= 3:
-                logger.info("3 consecutive empty pages. Download complete.")
-                break
-            time.sleep(1)
-            continue
-
-        empty_page_count = 0
-        total_records += len(records)
+            break
         page += 1
-
-        # Convert to DataFrame
-        df = pd.DataFrame(records)
-        for col in ['pickup_longitude', 'pickup_latitude',
-                    'dropoff_longitude', 'dropoff_latitude',
-                    'passenger_count', 'trip_distance']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        df['dropoff_datetime'] = pd.to_datetime(df['dropoff_datetime'], errors='coerce')
-        df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'], errors='coerce')
-
-        # Save chunk
-        chunk_file = chunk_path / f"chunk_{page:04d}.parquet"
-        df.to_parquet(chunk_file, compression='snappy', index=False)
-
-        logger.info(f"[Page {page}] Downloaded {len(records):,} records (total: {total_records:,})")
-
-        if len(records) < PAGE_SIZE:
-            logger.info("Last page reached.")
+        normalized = normalize_page(records)
+        normalized.to_parquet(
+            chunk_dir / f"chunk_{page:04d}.parquet",
+            compression="snappy",
+            index=False,
+        )
+        offset += len(normalized)
+        logger.info("%s: page=%s rows=%s", day, page, offset)
+        if len(records) < page_size:
             break
 
-        offset += len(records)
-        time.sleep(0.3)
-
-    return total_records, page
-
-
-def merge_chunks(chunk_dir, output_file):
-    """Merge all chunk Parquet files into one."""
-    chunk_path = Path(chunk_dir)
-    chunks = sorted(chunk_path.glob("chunk_*.parquet"))
-
-    if not chunks:
-        logger.error("No chunk files found to merge.")
-        return None
-
-    logger.info(f"Merging {len(chunks)} chunks into {output_file}...")
-
-    # Read first chunk to get schema
-    first_df = pd.read_parquet(chunks[0])
-    schema = pa.Table.from_pandas(first_df).schema
-
-    writer = pq.ParquetWriter(output_file, schema, compression='snappy')
-
-    for chunk_file in chunks:
-        df = pd.read_parquet(chunk_file)
-        table = pa.Table.from_pandas(df, schema=schema)
-        writer.write_table(table)
-        chunk_file.unlink()  # Delete chunk after writing
-        logger.info(f"  Merged {chunk_file.name}")
-
-    writer.close()
-    logger.info(f"Merged {len(chunks)} chunks into {output_file}")
-
-    return pd.read_parquet(output_file)
+    stats = merge_day_chunks(chunk_dir, output_path)
+    stats["status"] = "downloaded"
+    return stats
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Download 2014 NYC Yellow Taxi data for a full month')
-    parser.add_argument('--start', default='2014-01-01', help='Start date (YYYY-MM-DD)')
-    parser.add_argument('--end', default='2014-02-01', help='End date (YYYY-MM-DD)')
-    parser.add_argument('--output-dir', default='data/raw/taxi_2014', help='Output directory')
-    parser.add_argument('--chunk-dir', default='data/raw/taxi_2014/chunks', help='Temporary chunk directory')
+def write_fixture(
+    files: list[Path],
+    output_path: Path,
+    fixture_size: int,
+) -> None:
+    frames = [pd.read_parquet(path) for path in files]
+    combined = pd.concat(frames, ignore_index=True)
+    sample_size = min(fixture_size, len(combined))
+    fixture = combined.sample(sample_size, random_state=42).sort_values(
+        ["dropoff_datetime", "pickup_datetime"],
+        kind="mergesort",
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture.to_parquet(output_path, compression="snappy", index=False)
 
-    args = parser.parse_args()
 
-    start_dt = f"{args.start}T00:00:00"
-    end_dt = f"{args.end}T00:00:00"
-    output_file = f"{args.output_dir}/yellow_tripdata_{args.start}.parquet"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", default="2014-01-06")
+    parser.add_argument("--end", default="2014-01-13")
+    parser.add_argument("--output-dir", default="data/raw/taxi_2014")
+    parser.add_argument("--chunk-dir", default="data/raw/taxi_2014/chunks")
+    parser.add_argument("--manifest-dir", default="data/manifests")
+    parser.add_argument(
+        "--fixture",
+        default="data/fixtures/nyc_2014_taxi_week_sample.parquet",
+    )
+    parser.add_argument("--fixture-size", type=int, default=10_000)
+    return parser.parse_args()
 
-    logger.info("=" * 60)
-    logger.info(f"Downloading 2014 taxi data: {args.start} to {args.end}")
-    logger.info("=" * 60)
 
-    # Download
-    total, pages = download_and_save(start_dt, end_dt, args.output_dir, args.chunk_dir)
-    logger.info(f"Downloaded {total:,} records in {pages} pages")
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+    args = parse_args()
+    start = datetime.strptime(args.start, "%Y-%m-%d").date()
+    end = datetime.strptime(args.end, "%Y-%m-%d").date()
+    if end <= start:
+        raise ValueError("--end must be after --start")
 
-    if total == 0:
-        logger.error("No records downloaded. Aborting.")
-        return 1
+    output_dir = Path(args.output_dir)
+    chunk_root = Path(args.chunk_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_days: Dict[str, Dict[str, object]] = {}
+    session = requests.Session()
 
-    # Merge
-    df = merge_chunks(args.chunk_dir, output_file)
-    if df is None:
-        return 1
+    for day in iter_days(start, end):
+        manifest_days[day.isoformat()] = download_day(
+            day,
+            output_dir,
+            chunk_root,
+            session=session,
+        )
 
-    # Summary
-    size_mb = Path(output_file).stat().st_size / 1_048_576
-    logger.info(f"\n{'='*60}")
-    logger.info(f"DOWNLOAD COMPLETE")
-    logger.info(f"{'='*60}")
-    logger.info(f"File: {output_file}")
-    logger.info(f"Records: {len(df):,}")
-    logger.info(f"Size: {size_mb:.1f} MB")
-    logger.info(f"Date range: {df['dropoff_datetime'].min()} to {df['dropoff_datetime'].max()}")
-    logger.info(f"Invalid coords: {((df['dropoff_longitude'] == 0) | (df['dropoff_latitude'] == 0) | df['dropoff_longitude'].isna() | df['dropoff_latitude'].isna()).sum():,}")
-    logger.info(f"{'='*60}")
+    files = [
+        output_dir / f"yellow_tripdata_{day.isoformat()}.parquet"
+        for day in iter_days(start, end)
+    ]
+    write_fixture(files, Path(args.fixture), args.fixture_size)
 
+    manifest = {
+        "dataset": "NYC Open Data 2014 Yellow Taxi Trip Data",
+        "dataset_id": "gkne-dk5s",
+        "source": SODA_ENDPOINT,
+        "start_date_inclusive": start.isoformat(),
+        "end_date_exclusive": end.isoformat(),
+        "fields": FIELDS,
+        "days": manifest_days,
+        "total_rows": int(sum(item["rows"] for item in manifest_days.values())),
+        "fixture": {
+            "path": args.fixture,
+            "rows": min(args.fixture_size, sum(item["rows"] for item in manifest_days.values())),
+            "sha256": file_sha256(Path(args.fixture)),
+        },
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
+    manifest_dir = Path(args.manifest_dir)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / (
+        f"nyc_2014_taxi_{start.isoformat()}_{end.isoformat()}.json"
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
+    logger.info("Wrote manifest: %s", manifest_path)
     return 0
 
 
 if __name__ == "__main__":
-    import sys
-    sys.exit(main())
+    raise SystemExit(main())

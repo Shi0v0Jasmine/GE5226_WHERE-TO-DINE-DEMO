@@ -42,6 +42,11 @@ BACKENDS = {
     'google': GoogleMapsTravelTime,
 }
 
+
+class BackendUnavailableError(RuntimeError):
+    """Raised when a requested routing backend cannot be used."""
+
+
 class TravelTimeCalculator:
     """
     Unified travel time calculator with pluggable backends.
@@ -67,6 +72,7 @@ class TravelTimeCalculator:
         graph_path: Optional[str] = None,
         api_key: Optional[str] = None,
         reference_point: Tuple[float, float] = (40.7580, -73.9855),  # Times Square
+        allow_fallback: bool = True,
     ):
         if backend not in BACKENDS:
             raise ValueError(f"Unknown backend: {backend}. Choose from: {list(BACKENDS.keys())}")
@@ -77,9 +83,23 @@ class TravelTimeCalculator:
             graph_path=graph_path,
             api_key=api_key,
             reference_point=reference_point,
+            allow_fallback=allow_fallback,
         )
         self.mode = mode
-        self.backend_name = backend
+        self.requested_backend = backend
+        self.allow_fallback = allow_fallback
+        self.fallback_reason = None
+        self.effective_backend = backend
+
+        if not self.backend.is_available():
+            reason = self.backend.info().get('unavailable_reason') or (
+                f"{backend} backend is not configured"
+            )
+            if not allow_fallback:
+                raise BackendUnavailableError(reason)
+            self.backend = ProxyTravelTime(mode=mode, reference_point=reference_point)
+            self.effective_backend = 'proxy'
+            self.fallback_reason = reason
 
     def matrix(
         self,
@@ -99,7 +119,22 @@ class TravelTimeCalculator:
         np.ndarray, shape (n_origins, n_destinations)
             Travel time in minutes.
         """
-        return self.backend.matrix(origins, destinations)
+        try:
+            matrix = self.backend.matrix(origins, destinations)
+        except RuntimeError as exc:
+            if not self.allow_fallback:
+                raise BackendUnavailableError(str(exc)) from exc
+            raise
+        backend_info = self.backend.info()
+        if backend_info.get('fallback_used'):
+            if not self.allow_fallback:
+                raise BackendUnavailableError(
+                    backend_info.get('fallback_reason') or
+                    f"{self.requested_backend} routing failed"
+                )
+            self.effective_backend = 'proxy'
+            self.fallback_reason = backend_info.get('fallback_reason')
+        return matrix
 
     def single(
         self,
@@ -124,8 +159,11 @@ class TravelTimeCalculator:
     def info(self) -> dict:
         """Return backend info and status."""
         return {
-            'backend': self.backend_name,
+            'requested_backend': self.requested_backend,
+            'effective_backend': self.effective_backend,
             'mode': self.mode,
             'available': self.is_available(),
+            'is_estimate': self.effective_backend == 'proxy',
+            'fallback_reason': self.fallback_reason,
             'details': self.backend.info(),
         }
